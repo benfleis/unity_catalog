@@ -52,8 +52,8 @@ jobs:
       run: |
         sudo apt install default-jre
         git clone https://github.com/unitycatalog/unitycatalog.git
-        ./bin/start-uc-server &
-        sleep 10
+        cd unitycatalog && ./bin/start-uc-server &
+        sleep 30
 
     - name: Build extension
       run: |

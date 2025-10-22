@@ -1,10 +1,13 @@
 #include "storage/uc_catalog.hpp"
+#include "duckdb/main/attached_database.hpp"
+#include "duckdb/main/database.hpp"
+#include "duckdb/parser/parsed_data/create_schema_info.hpp"
+#include "duckdb/parser/parsed_data/drop_info.hpp"
+#include "duckdb/planner/operator/logical_insert.hpp"
+#include "duckdb/storage/database_size.hpp"
 #include "storage/uc_schema_entry.hpp"
 #include "storage/uc_transaction.hpp"
-#include "duckdb/storage/database_size.hpp"
-#include "duckdb/parser/parsed_data/drop_info.hpp"
-#include "duckdb/parser/parsed_data/create_schema_info.hpp"
-#include "duckdb/main/attached_database.hpp"
+#include "duckdb/main/secret/secret_manager.hpp"
 
 namespace duckdb {
 
@@ -79,12 +82,78 @@ void UCCatalog::ClearCache() {
 
 PhysicalOperator &UCCatalog::PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner,
 			    LogicalCreateTable &op, PhysicalOperator &plan) {
-	throw NotImplementedException("UCCatalog PlanInsert");
+	throw NotImplementedException("UCCatalog PlanCreateTableAs");
 }
 
 PhysicalOperator &UCCatalog::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
 	     optional_ptr<PhysicalOperator> plan) {
-		throw NotImplementedException("UCCatalog PlanCreateTableAs");
+
+	// LAZY CREATE ATTACHED DB
+	if (!op.table->Cast<UCTableEntry>().internal_attached_database) {
+		auto &db_manager = DatabaseManager::Get(context);
+
+		// Create the attach info for the table
+		AttachInfo info;
+		info.name = "__uc_catalog_internal_" + internal_name + "_" + op.table->Cast<UCTableEntry>().schema.name + "_" + op.table->Cast<UCTableEntry>().name;
+		info.options = {{"type", Value("Delta")}};
+		info.path = op.table->Cast<UCTableEntry>().table_data->storage_location;
+		AttachOptions options(context.db->config.options);
+		options.access_mode = AccessMode::READ_WRITE;
+		options.db_type = "delta";
+		auto &internal_db = op.table->Cast<UCTableEntry>().internal_attached_database;
+
+		internal_db = db_manager.AttachDatabase(context, info, options);
+
+		//! Initialize the database.
+		internal_db->Initialize(context);
+		internal_db->FinalizeLoad(context);
+		db_manager.FinalizeAttach(context, info, internal_db);
+	}
+
+	// LOAD THE INTERNAL TABLE ENTRY
+	auto internal_catalog = op.table->Cast<UCTableEntry>().GetInternalCatalog();
+
+	// CREATE TMP CREDENTIALS TODO: dedup with getScanFunctoin
+	auto &table_data = op.table->Cast<UCTableEntry>().table_data;
+	if (table_data->storage_location.find("file://") != 0) {
+		auto &secret_manager = SecretManager::Get(context);
+		// Get Credentials from UCAPI
+		auto table_credentials = UCAPI::GetTableCredentials(table_data->table_id, credentials);
+
+		// Inject secret into secret manager sc oped to this path TODO:
+		CreateSecretInput input;
+		input.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
+		input.persist_type = SecretPersistType::TEMPORARY;
+		input.name = "__internal_uc_" + table_data->table_id;
+		input.type = "s3";
+		input.provider = "config";
+		input.options = {
+			{"key_id", table_credentials.key_id},
+			{"secret", table_credentials.secret},
+			{"session_token", table_credentials.session_token},
+			{"region", credentials.aws_region},
+		    };
+		input.scope = {table_data->storage_location};
+
+		secret_manager.CreateSecret(context, input);
+	}
+
+	auto op_copy = op.Copy(context);
+	op_copy->types = op.types;
+
+	auto default_table = internal_catalog->GetDefaultTable();
+	auto default_schema = internal_catalog->GetDefaultSchema();
+
+	CatalogEntryRetriever retriever(context);
+	EntryLookupInfo lookup_info(CatalogType::TABLE_ENTRY, default_table);
+	auto default_table_entry = internal_catalog->LookupEntry(retriever, default_schema, lookup_info, OnEntryNotFound::THROW_EXCEPTION);
+	TableCatalogEntry &catalog_entry = default_table_entry.entry->Cast<TableCatalogEntry>();
+
+	op_copy->Cast<LogicalInsert>().table = catalog_entry;
+
+    auto &result =  internal_catalog->PlanInsert(context, planner, op_copy->Cast<LogicalInsert>(), plan);
+
+	return result;
 }
 
 PhysicalOperator &UCCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,

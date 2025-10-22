@@ -39,7 +39,10 @@ public:
 
 	unique_ptr<UCAPITable> table_data;
 
+	shared_ptr<AttachedDatabase> internal_attached_database;
+
 public:
+	optional_ptr<Catalog> GetInternalCatalog();
 	unique_ptr<BaseStatistics> GetStatistics(ClientContext &context, column_t column_id) override;
 
 	TableFunction GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) override;

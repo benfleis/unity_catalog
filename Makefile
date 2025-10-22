@@ -4,7 +4,8 @@ PROJ_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 EXT_NAME=uc_catalog
 EXT_CONFIG=${PROJ_DIR}extension_config.cmake
 
-CORE_EXTENSIONS='parquet;httpfs'
+# Core extensions that we need for crucial testing
+DEFAULT_TEST_EXTENSION_DEPS=parquet;httpfs;delta
 
 # Include the Makefile from extension-ci-tools
 include extension-ci-tools/makefiles/duckdb_extension.Makefile

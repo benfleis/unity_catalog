@@ -27,6 +27,10 @@ unique_ptr<BaseStatistics> UCTableEntry::GetStatistics(ClientContext &context, c
 	return nullptr;
 }
 
+optional_ptr<Catalog> UCTableEntry::GetInternalCatalog() {
+	return internal_attached_database->GetCatalog();
+}
+
 void UCTableEntry::BindUpdateConstraints(Binder &binder, LogicalGet &, LogicalProjection &, LogicalUpdate &,
                                          ClientContext &) {
 	throw NotImplementedException("BindUpdateConstraints");
