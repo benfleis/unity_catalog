@@ -87,20 +87,26 @@ PhysicalOperator &UCCatalog::PlanCreateTableAs(ClientContext &context, PhysicalP
 
 PhysicalOperator &UCCatalog::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
 	     optional_ptr<PhysicalOperator> plan) {
+	auto& table = op.table.Cast<UCTableEntry>();
 
 	// LAZY CREATE ATTACHED DB
-	if (!op.table->Cast<UCTableEntry>().internal_attached_database) {
+	// TODO: move to transaction?
+	if (!table.internal_attached_database) {
 		auto &db_manager = DatabaseManager::Get(context);
 
 		// Create the attach info for the table
 		AttachInfo info;
-		info.name = "__uc_catalog_internal_" + internal_name + "_" + op.table->Cast<UCTableEntry>().schema.name + "_" + op.table->Cast<UCTableEntry>().name;
-		info.options = {{"type", Value("Delta")}};
-		info.path = op.table->Cast<UCTableEntry>().table_data->storage_location;
+		info.name = "__uc_catalog_internal_" + internal_name + "_" + table.schema.name + "_" + table.name; // TODO:
+		info.options = {
+			{"type", Value("Delta")},
+			{"child_catalog_mode", Value(true)},
+			{"internal_table_name", Value(table.name)}
+		};
+		info.path = table.table_data->storage_location;
 		AttachOptions options(context.db->config.options);
 		options.access_mode = AccessMode::READ_WRITE;
 		options.db_type = "delta";
-		auto &internal_db = op.table->Cast<UCTableEntry>().internal_attached_database;
+		auto &internal_db = table.internal_attached_database;
 
 		internal_db = db_manager.AttachDatabase(context, info, options);
 
@@ -111,10 +117,10 @@ PhysicalOperator &UCCatalog::PlanInsert(ClientContext &context, PhysicalPlanGene
 	}
 
 	// LOAD THE INTERNAL TABLE ENTRY
-	auto internal_catalog = op.table->Cast<UCTableEntry>().GetInternalCatalog();
+	auto internal_catalog = table.GetInternalCatalog();
 
-	// CREATE TMP CREDENTIALS TODO: dedup with getScanFunctoin
-	auto &table_data = op.table->Cast<UCTableEntry>().table_data;
+	// CREATE TMP CREDENTIALS TODO: dedup with getScanFunction
+	auto &table_data = table.table_data;
 	if (table_data->storage_location.find("file://") != 0) {
 		auto &secret_manager = SecretManager::Get(context);
 		// Get Credentials from UCAPI
@@ -138,22 +144,7 @@ PhysicalOperator &UCCatalog::PlanInsert(ClientContext &context, PhysicalPlanGene
 		secret_manager.CreateSecret(context, input);
 	}
 
-	auto op_copy = op.Copy(context);
-	op_copy->types = op.types;
-
-	auto default_table = internal_catalog->GetDefaultTable();
-	auto default_schema = internal_catalog->GetDefaultSchema();
-
-	CatalogEntryRetriever retriever(context);
-	EntryLookupInfo lookup_info(CatalogType::TABLE_ENTRY, default_table);
-	auto default_table_entry = internal_catalog->LookupEntry(retriever, default_schema, lookup_info, OnEntryNotFound::THROW_EXCEPTION);
-	TableCatalogEntry &catalog_entry = default_table_entry.entry->Cast<TableCatalogEntry>();
-
-	op_copy->Cast<LogicalInsert>().table = catalog_entry;
-
-    auto &result =  internal_catalog->PlanInsert(context, planner, op_copy->Cast<LogicalInsert>(), plan);
-
-	return result;
+    return internal_catalog->PlanInsert(context, planner, op, plan);
 }
 
 PhysicalOperator &UCCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
