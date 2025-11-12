@@ -17,7 +17,7 @@ jobs:
       GEN: ninja
       DUCKDB_PLATFORM: linux_amd64
       BUILD_EXTENSION_TEST_DEPS: full
-      DATABRICKS_WRITE_TEST_CATALOG: duckdb_write_testing
+#      DATABRICKS_WRITE_TEST_CATALOG: duckdb_write_testing
 
     steps:
       - name: Install required ubuntu packages
@@ -64,18 +64,12 @@ jobs:
           DATABRICKS_ENDPOINT: 'op://testing-rw/databricks_free/endpoint'
           DATABRICKS_REGION: 'op://testing-rw/databricks_free/aws_region'
 
-#      - name: Create Databricks config
-#        run: |
-#          mkdir -p ~/.databrickscfg
-#          echo "[ DEFAULT ]" > ~/.databrickscfg
-#          echo "host = $DATABRICKS_ENDPOINT" >> ~/.databrickscfg
-#          echo "token = $DATABRICKS_TOKEN" >> ~/.databrickscfg
-#
-#      - name: Configure Python
-#        run: |
-#          python3 -m venv venv
-#          . ./venv/bin/activate
-#          ./venv/bin/pip3 install -r scripts/requirements
+      - name: Create Databricks config
+        run: |
+          mkdir -p ~/.databrickscfg
+          echo "[ DEFAULT ]" > ~/.databrickscfg
+          echo "host = $DATABRICKS_ENDPOINT" >> ~/.databrickscfg
+          echo "token = $DATABRICKS_TOKEN" >> ~/.databrickscfg
 
 #      - name: Generate random schema name
 #        run: |
