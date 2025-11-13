@@ -21,6 +21,7 @@ jobs:
       extension_name: uc_catalog
       exclude_archs: 'wasm_mvp;wasm_eh;wasm_threads;windows_amd64_mingw;windows_amd64;linux_arm64;linux_amd64_musl'
       enable_rust: true
+      reduced_ci_mode: ${{ github.event_name == 'pull_request' && 'enabled' || 'disabled'}}
 
   duckdb-stable-deploy:
     name: Deploy extension binaries
