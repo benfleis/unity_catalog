@@ -140,8 +140,8 @@ void UCSchemaEntry::DropEntry(ClientContext &context, DropInfo &info) {
 	GetCatalogSet(info.type).DropEntry(context, info);
 }
 
-optional_ptr<CatalogEntry>
-UCSchemaEntry::LookupEntry(CatalogTransaction transaction, const EntryLookupInfo &lookup_info) {
+optional_ptr<CatalogEntry> UCSchemaEntry::LookupEntry(CatalogTransaction transaction,
+                                                      const EntryLookupInfo &lookup_info) {
 	if (!CatalogTypeIsSupported(lookup_info.GetCatalogType())) {
 		return nullptr;
 	}

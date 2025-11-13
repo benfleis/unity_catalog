@@ -6,10 +6,8 @@ duckdb_extension_load(uc_catalog
     LOAD_TESTS
 )
 
-# TODO enable this to test with delta
-#duckdb_extension_load(httpfs)
-#duckdb_extension_load(json)
-#duckdb_extension_load(delta
-#        GIT_URL https://github.com/duckdb/duckdb_delta
-#        GIT_TAG main
-#)
+duckdb_extension_load(delta
+        GIT_URL https://github.com/duckdb/duckdb-delta
+        GIT_TAG 48168a8ff954e9c3416f3e5affd201cf373b3250
+        SUBMODULES extension-ci-tools
+)

@@ -1,0 +1,70 @@
+# name: test/sql/databricks/basic.test
+# description: test
+# group: [databricks]
+
+# Require statement will ensure this test is run with this extension loaded
+require parquet
+
+require uc_catalog
+
+require delta
+
+require httpfs
+
+require-env DATABRICKS_TOKEN
+
+require-env DATABRICKS_ENDPOINT
+
+require-env DATABRICKS_REGION
+
+statement ok
+CREATE SECRET (
+    TYPE UC,
+    TOKEN '${DATABRICKS_TOKEN}',
+    ENDPOINT '${DATABRICKS_ENDPOINT}',
+    AWS_REGION '${DATABRICKS_REGION}'
+);
+
+# Attach to databricks through the unity catalog API
+statement ok
+ATTACH 'duckdblabs_testing' (TYPE UC_CATALOG, DEFAULT_SCHEMA 'main');
+
+# Can query a table
+query I nosort expected_res
+from duckdblabs_testing.main.simple_table;
+
+statement ok
+use duckdblabs_testing
+
+query I nosort expected_res
+from simple_table;
+
+statement ok
+use memory
+
+statement ok
+DETACH duckdblabs_testing
+
+# Without a default schema is also possible
+
+# FIXME
+mode skip
+
+statement ok
+ATTACH 'duckdblabs_testing' (TYPE UC_CATALOG);
+
+# Can query a table
+query I nosort expected_res
+from duckdblabs_testing.main.simple_table;
+
+# TODO: can we fix this? Or at least throw a nicer error
+statement error
+use duckdblabs_testing
+----
+Catalog Error: SET schema: No catalog + schema named "duckdblabs_testing" found.
+
+statement ok
+use duckdblabs_testing.main
+
+query I nosort expected_res
+from simple_table;

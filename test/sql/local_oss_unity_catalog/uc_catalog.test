@@ -1,6 +1,6 @@
-# name: test/sql/uc_catalog.test
+# name: test/sql/local_oss_unity_catalog/uc_catalog.test
 # description: test uc_catalog extension
-# group: [uc_catalog]
+# group: [local_oss_unity_catalog]
 
 # Require statement will ensure this test is run with this extension loaded
 require parquet
@@ -23,20 +23,67 @@ CREATE SECRET (
 
 # Catalog Secret
 statement ok
-ATTACH 'unity' AS unity (TYPE UC_CATALOG);
+ATTACH 'unity' AS my_catalog (TYPE UC_CATALOG);
+
+# TODO: can we fix this? Or at least throw a nicer error?
+statement error
+USE my_catalog;
+----
+Catalog Error: SET schema: No catalog + schema named "my_catalog" found.
+
+# We can switch to a specific schema
+statement ok
+USE my_catalog.default;
+
+# We can now query the tables in the schema!
+query III
+FROM marksheet;
+----
+1	nWYHawtqUw	930
+2	uvOzzthsLV	166
+3	WIAehuXWkv	170
+4	wYCSvnJKTo	709
+5	VsslXsUIDZ	993
+6	ZLsACYYTFy	813
+7	BtDDvLeBpK	52
+8	YISVtrPfGr	8
+9	PBPJHDFjjC	45
+10	qbDuUJzJMO	756
+11	EjqqWoaLJn	712
+12	jpZLMdKXpn	847
+13	acpjQXpJCp	649
+14	nOKqHhRwao	133
+15	kxUUZEUoKv	398
+
+# FIXME: However, there are some issues because we don't have a default schema in OSS unity catalog 
+statement error
+SELECT database_name, schema_name, table_name FROM duckdb_tables() where database_name='my_catalog' order by table_name;
+----
+Invalid Input Error: Default schema for catalog 'my_catalog' not found. This means auto-detection of default schema failed. Please specify a DEFAULT_SCHEMA on ATTACH: `ATTACH '..' (TYPE uc_catalog, DEFAULT_SCHEMA 'my_schema')`
+
+statement ok
+USE memory; DETACH my_catalog
+
+statement ok
+ATTACH 'unity' AS my_catalog (TYPE UC_CATALOG, DEFAULT_SCHEMA 'default');
+
+# Now this works
+statement ok
+USE my_catalog;
 
 query III
-SELECT database_name, schema_name, table_name FROM duckdb_tables() where database_name='unity' order by table_name;
+SELECT database_name, schema_name, table_name FROM duckdb_tables() where database_name='my_catalog' order by table_name;
 ----
-unity	default	marksheet
-unity	default	marksheet_uniform
-unity	default	numbers
-unity	default	user_countries
+my_catalog	default	marksheet
+my_catalog	default	marksheet_uniform
+my_catalog	default	numbers
+my_catalog	default	user_countries
 
 #mode output_result
 
+# Use the default schema
 query III
-FROM unity.default.marksheet;
+FROM marksheet;
 ----
 1	nWYHawtqUw	930
 2	uvOzzthsLV	166
@@ -59,7 +106,7 @@ FROM unity.default.marksheet;
 #FROM unity.default.marksheet_uniform;
 
 query II
-FROM unity.default.numbers;
+FROM my_catalog.default.numbers;
 ----
 564	188.75535598441473
 755	883.6105633023361
@@ -78,7 +125,7 @@ FROM unity.default.numbers;
 958	509.3712727285101
 
 query III
-FROM unity.default.user_countries;
+FROM my_catalog.default.user_countries;
 ----
 Logan Johnson	25	Austria
 Mr. Jay Russell	33	Austria

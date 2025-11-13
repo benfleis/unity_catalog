@@ -7,3 +7,5 @@ testext
 test/python/__pycache__/
 .Rhistory
 scripts/uc-script.sh
+unitycatalogga
+test/sql/tmp.test

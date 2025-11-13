@@ -19,7 +19,8 @@ static bool IsInternalTable(const string &catalog, const string &schema) {
 void UCSchemaSet::LoadEntries(ClientContext &context) {
 
 	auto &uc_catalog = catalog.Cast<UCCatalog>();
-	auto tables = UCAPI::GetSchemas(catalog.GetName(), uc_catalog.credentials);
+
+	auto tables = UCAPI::GetSchemas(uc_catalog.internal_name, uc_catalog.credentials);
 
 	for (const auto &schema : tables) {
 		CreateSchemaInfo info;

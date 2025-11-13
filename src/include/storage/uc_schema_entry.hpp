@@ -41,8 +41,7 @@ public:
 	void Scan(ClientContext &context, CatalogType type, const std::function<void(CatalogEntry &)> &callback) override;
 	void Scan(CatalogType type, const std::function<void(CatalogEntry &)> &callback) override;
 	void DropEntry(ClientContext &context, DropInfo &info) override;
-	optional_ptr<CatalogEntry> LookupEntry(CatalogTransaction transaction,
-								  const EntryLookupInfo &lookup_info) override;
+	optional_ptr<CatalogEntry> LookupEntry(CatalogTransaction transaction, const EntryLookupInfo &lookup_info) override;
 
 private:
 	UCCatalogSet &GetCatalogSet(CatalogType type);
