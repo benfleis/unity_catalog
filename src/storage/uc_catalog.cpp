@@ -12,9 +12,9 @@
 namespace duckdb {
 
 UCCatalog::UCCatalog(AttachedDatabase &db_p, const string &internal_name, AttachOptions &attach_options,
-                     UCCredentials credentials, const string &default_schema)
+                     UCCredentials credentials, const string &default_schema, string catalog_name_p)
     : Catalog(db_p), internal_name(internal_name), access_mode(attach_options.access_mode),
-      credentials(std::move(credentials)), schemas(*this), default_schema(default_schema) {
+      credentials(std::move(credentials)), schemas(*this), default_schema(default_schema), catalog_name(std::move(catalog_name_p)) {
 }
 
 UCCatalog::~UCCatalog() = default;
@@ -49,7 +49,7 @@ optional_ptr<SchemaCatalogEntry> UCCatalog::LookupSchema(CatalogTransaction tran
 		if (default_schema.empty()) {
 			throw InvalidInputException(
 			    "Default schema for catalog '%s' not found. This means auto-detection of default schema failed. Please "
-			    "specify a DEFAULT_SCHEMA on ATTACH: `ATTACH '..' (TYPE uc_catalog, DEFAULT_SCHEMA 'my_schema')`",
+			    "specify a DEFAULT_SCHEMA on ATTACH: `ATTACH '..' (TYPE unity_catalog, DEFAULT_SCHEMA 'my_schema')`",
 			    GetName());
 		}
 		return GetSchema(transaction, default_schema, if_not_found);
@@ -102,7 +102,7 @@ PhysicalOperator &UCCatalog::PlanInsert(ClientContext &context, PhysicalPlanGene
 
 		// Create the attach info for the table
 		AttachInfo info;
-		info.name = "__uc_catalog_internal_" + internal_name + "_" + table.schema.name + "_" + table.name; // TODO:
+		info.name = "__unity_catalog_internal_" + internal_name + "_" + table.schema.name + "_" + table.name; // TODO:
 		info.options = {
 		    {"type", Value("Delta")}, {"child_catalog_mode", Value(true)}, {"internal_table_name", Value(table.name)}};
 		info.path = table.table_data->storage_location;
@@ -133,7 +133,7 @@ PhysicalOperator &UCCatalog::PlanInsert(ClientContext &context, PhysicalPlanGene
 		CreateSecretInput input;
 		input.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
 		input.persist_type = SecretPersistType::TEMPORARY;
-		input.name = "__internal_uc_" + table_data->table_id;
+		input.name = "_internal_unity_catalog_" + table_data->table_id;
 		input.type = "s3";
 		input.provider = "config";
 		input.options = {

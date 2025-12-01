@@ -9,14 +9,23 @@
 #include "storage/uc_catalog.hpp"
 #include "storage/uc_transaction_manager.hpp"
 #include "uc_api.hpp"
-#include "uc_catalog_extension.hpp"
+#include "unity_catalog_extension.hpp"
 
 namespace duckdb {
 
+template <bool SHORT_NAME=false>
 static unique_ptr<BaseSecret> CreateUCSecretFunction(ClientContext &, CreateSecretInput &input) {
 	// apply any overridden settings
 	vector<string> prefix_paths;
-	auto result = make_uniq<KeyValueSecret>(prefix_paths, "uc", "config", input.name);
+
+	string name;
+	if (SHORT_NAME) {
+		name = "uc";
+	} else {
+		name = "unity_catalog";
+	}
+
+	auto result = make_uniq<KeyValueSecret>(prefix_paths, name, "config", input.name);
 	for (const auto &named_param : input.options) {
 		auto lower_name = StringUtil::Lower(named_param.first);
 
@@ -59,6 +68,7 @@ unique_ptr<SecretEntry> GetSecret(ClientContext &context, const string &secret_n
 	return nullptr;
 }
 
+template <bool DEPRECATED_NAME=false>
 static unique_ptr<Catalog> UCCatalogAttach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
                                            AttachedDatabase &db, const string &name, AttachInfo &info,
                                            AttachOptions &attach_options) {
@@ -83,14 +93,21 @@ static unique_ptr<Catalog> UCCatalogAttach(optional_ptr<StorageExtensionInfo> st
 	// if no secret is specified we default to the unnamed mysql secret, if it
 	// exists
 	bool explicit_secret = !secret_name.empty();
-	if (!explicit_secret) {
-		// look up settings from the default unnamed mysql secret if none is
+
+	unique_ptr<SecretEntry> secret_entry;
+
+	if (!secret_name.empty()) {
+		secret_entry = GetSecret(context, secret_name);
+	} else {
+		// look up settings from the default unnamed secret if none is
 		// provided
-		secret_name = "__default_uc";
+		secret_entry = GetSecret(context, "__default_unity_catalog");
+		if (!secret_entry) {
+			secret_entry = GetSecret(context, "__default_uc");
+		}
 	}
 
 	string connection_string = info.path;
-	auto secret_entry = GetSecret(context, secret_name);
 	if (secret_entry) {
 		// secret found - read data
 		const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
@@ -121,7 +138,13 @@ static unique_ptr<Catalog> UCCatalogAttach(optional_ptr<StorageExtensionInfo> st
 		}
 	}
 
-	return make_uniq<UCCatalog>(db, info.path, attach_options, credentials, default_schema);
+	string catalog_name;
+	if (DEPRECATED_NAME) {
+		catalog_name = "uc_catalog";
+	} else {
+		catalog_name = "unity_catalog";
+	}
+	return make_uniq<UCCatalog>(db, info.path, attach_options, credentials, default_schema, catalog_name);
 }
 
 static unique_ptr<TransactionManager> CreateTransactionManager(optional_ptr<StorageExtensionInfo> storage_info,
@@ -130,42 +153,56 @@ static unique_ptr<TransactionManager> CreateTransactionManager(optional_ptr<Stor
 	return make_uniq<UCTransactionManager>(db, uc_catalog);
 }
 
-class UCCatalogStorageExtension : public StorageExtension {
+template <bool DEPRECATED_NAME>
+class UnityCatalogStorageExtension : public StorageExtension {
 public:
-	UCCatalogStorageExtension() {
-		attach = UCCatalogAttach;
+	UnityCatalogStorageExtension() {
+		attach = UCCatalogAttach<DEPRECATED_NAME>;
 		create_transaction_manager = CreateTransactionManager;
 	}
 };
 
 static void LoadInternal(ExtensionLoader &loader) {
+	// Register unity_catalog secret type
 	SecretType secret_type;
-	secret_type.name = "uc";
+	secret_type.name = "unity_catalog";
 	secret_type.deserializer = KeyValueSecret::Deserialize<KeyValueSecret>;
 	secret_type.default_provider = "config";
-
 	loader.RegisterSecretType(secret_type);
 
-	CreateSecretFunction mysql_secret_function = {"uc", "config", CreateUCSecretFunction};
+	// Also register the short alias
+	secret_type.name = "uc";
+	loader.RegisterSecretType(secret_type);
+
+	// Register the create secret function
+	CreateSecretFunction mysql_secret_function = {"unity_catalog", "config", CreateUCSecretFunction};
 	SetUCSecretParameters(mysql_secret_function);
 	loader.RegisterFunction(mysql_secret_function);
 
+	// Register the create secret function for the short alias
+	CreateSecretFunction mysql_secret_function_deprecated = {"uc", "config", CreateUCSecretFunction<true>};
+	SetUCSecretParameters(mysql_secret_function_deprecated);
+	loader.RegisterFunction(mysql_secret_function_deprecated);
+
 	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
-	config.storage_extensions["uc_catalog"] = make_uniq<UCCatalogStorageExtension>();
+	config.storage_extensions["unity_catalog"] = make_uniq<UnityCatalogStorageExtension<false>>();
+
+	// Also register the (deprecated) alias
+	config.storage_extensions["uc_catalog"] = make_uniq<UnityCatalogStorageExtension<false>>();
 }
 
-void UcCatalogExtension::Load(ExtensionLoader &loader) {
+void UnityCatalogExtension::Load(ExtensionLoader &loader) {
 	LoadInternal(loader);
 }
-std::string UcCatalogExtension::Name() {
-	return "uc_catalog";
+std::string UnityCatalogExtension::Name() {
+	return "unity_catalog";
 }
 
 } // namespace duckdb
 
 extern "C" {
 
-DUCKDB_CPP_EXTENSION_ENTRY(uc_catalog, loader) {
+DUCKDB_CPP_EXTENSION_ENTRY(unity_catalog, loader) {
 	duckdb::LoadInternal(loader);
 }
 }

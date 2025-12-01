@@ -9,7 +9,6 @@
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
 #include "uc_api.hpp"
-#include "../../duckdb/third_party/catch/catch.hpp"
 
 namespace duckdb {
 

@@ -35,17 +35,19 @@ public:
 class UCCatalog : public Catalog {
 public:
 	explicit UCCatalog(AttachedDatabase &db_p, const string &internal_name, AttachOptions &attach_options,
-	                   UCCredentials credentials, const string &default_schema);
+	                   UCCredentials credentials, const string &default_schema, string catalog_name = "unity_catalog");
 	~UCCatalog();
 
 	string internal_name;
 	AccessMode access_mode;
 	UCCredentials credentials;
 
+	string catalog_name;
+
 public:
 	void Initialize(bool load_builtin) override;
 	string GetCatalogType() override {
-		return "uc";
+		return catalog_name;
 	}
 
 	optional_ptr<CatalogEntry> CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) override;

@@ -1,11 +1,11 @@
 # name: test/sql/local_oss_unity_catalog/uc_catalog.test
-# description: test uc_catalog extension
+# description: test unity_catalog extension
 # group: [local_oss_unity_catalog]
 
 # Require statement will ensure this test is run with this extension loaded
 require parquet
 
-require uc_catalog
+require unity_catalog
 
 require delta
 
@@ -15,7 +15,7 @@ require-env UC_TEST_SERVER_RUNNING
 
 statement ok
 CREATE SECRET (
-    TYPE UC,
+    TYPE UNITY_CATALOG,
     TOKEN 'not-used',
     ENDPOINT 'http://127.0.0.1:8080',
     AWS_REGION 'us-east-2'
@@ -23,7 +23,7 @@ CREATE SECRET (
 
 # Catalog Secret
 statement ok
-ATTACH 'unity' AS my_catalog (TYPE UC_CATALOG);
+ATTACH 'unity' AS my_catalog (TYPE UNITY_CATALOG);
 
 # TODO: can we fix this? Or at least throw a nicer error?
 statement error
@@ -59,13 +59,13 @@ FROM marksheet;
 statement error
 SELECT database_name, schema_name, table_name FROM duckdb_tables() where database_name='my_catalog' order by table_name;
 ----
-Invalid Input Error: Default schema for catalog 'my_catalog' not found. This means auto-detection of default schema failed. Please specify a DEFAULT_SCHEMA on ATTACH: `ATTACH '..' (TYPE uc_catalog, DEFAULT_SCHEMA 'my_schema')`
+Invalid Input Error: Default schema for catalog 'my_catalog' not found. This means auto-detection of default schema failed. Please specify a DEFAULT_SCHEMA on ATTACH: `ATTACH '..' (TYPE unity_catalog, DEFAULT_SCHEMA 'my_schema')`
 
 statement ok
 USE memory; DETACH my_catalog
 
 statement ok
-ATTACH 'unity' AS my_catalog (TYPE UC_CATALOG, DEFAULT_SCHEMA 'default');
+ATTACH 'unity' AS my_catalog (TYPE UNITY_CATALOG, DEFAULT_SCHEMA 'default');
 
 # Now this works
 statement ok

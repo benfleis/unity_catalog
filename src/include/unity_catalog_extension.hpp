@@ -4,7 +4,7 @@
 
 namespace duckdb {
 
-class UcCatalogExtension : public Extension {
+class UnityCatalogExtension : public Extension {
 public:
 	void Load(ExtensionLoader &load) override;
 	std::string Name() override;
