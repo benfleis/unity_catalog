@@ -58,8 +58,6 @@ public:
 	static vector<UCAPITable> GetTables(ClientContext &ctx, Catalog &catalog, const string &schema,
 	                                    const UCCredentials &credentials);
 	static vector<UCAPISchema> GetSchemas(ClientContext &ctx, Catalog &catalog, const UCCredentials &credentials);
-	static vector<UCAPITable> GetTablesInSchema(ClientContext &ctx, Catalog &catalog, const string &schema,
-	                                            const UCCredentials &credentials);
 };
 
 } // namespace duckdb

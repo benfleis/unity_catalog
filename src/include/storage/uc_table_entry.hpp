@@ -14,6 +14,8 @@
 
 namespace duckdb {
 
+class UCCatalog;
+
 struct UCTableInfo {
 	UCTableInfo() {
 		create_info = make_uniq<CreateTableInfo>();
@@ -40,13 +42,17 @@ public:
 	unique_ptr<UCAPITable> table_data;
 
 	shared_ptr<AttachedDatabase> internal_attached_database;
+	optional_ptr<Transaction> active_transaction;
 
 public:
 	optional_ptr<Catalog> GetInternalCatalog();
 	unique_ptr<BaseStatistics> GetStatistics(ClientContext &context, column_t column_id) override;
 
 	TableFunction GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) override;
+	TableFunction GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data, const EntryLookupInfo &lookup_info) override;
 
+	void RefreshCredentials(ClientContext &context, UCCatalog &catalog);
+	void InternalAttach(ClientContext &context, UCCatalog &catalog);
 	TableStorageInfo GetStorageInfo(ClientContext &context) override;
 
 	virtual_column_map_t GetVirtualColumns() const override;

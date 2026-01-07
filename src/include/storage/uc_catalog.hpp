@@ -49,6 +49,9 @@ public:
 	string GetCatalogType() override {
 		return catalog_name;
 	}
+	bool SupportsTimeTravel() const override {
+		return true;
+	}
 
 	optional_ptr<CatalogEntry> CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) override;
 
