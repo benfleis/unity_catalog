@@ -17,19 +17,27 @@
 
 namespace duckdb {
 
-UCTableSet::UCTableSet(UCSchemaEntry &schema) : UCInSchemaSet(schema) {
+UCTableSet::UCTableSet(UCSchemaEntry &schema) : catalog(schema.ParentCatalog().Cast<UCCatalog>()), schema(schema) {
 }
 
 static ColumnDefinition CreateColumnDefinition(ClientContext &context, UCAPIColumnDefinition &coldef) {
 	return {coldef.name, UCUtils::TypeToLogicalType(context, coldef.type_text)};
 }
 
-void UCTableSet::LoadEntries(ClientContext &context) {
+optional_ptr<TableCatalogEntry> TableInformation::GetEntry(idx_t version) {
+	lock_guard<mutex> l(entry_lock);
+	auto it = schema_versions.find(version);
+	if (it == schema_versions.end()) {
+		return nullptr;
+	}
+	auto &entry = it->second;
+	return entry->Cast<TableCatalogEntry>();
+};
+
+void UCTableSet::LoadEntries(ClientContext &context, const EntryLookupInfo &lookup) {
 	auto &transaction = UCTransaction::Get(context, catalog);
 
 	auto &uc_catalog = catalog.Cast<UCCatalog>();
-
-	// TODO: handle out-of-order columns using position property
 	auto tables = UCAPI::GetTables(context, catalog, schema.name, uc_catalog.credentials);
 
 	for (auto &table : tables) {
@@ -45,19 +53,6 @@ void UCTableSet::LoadEntries(ClientContext &context) {
 
 		CreateEntry(std::move(table_entry));
 	}
-}
-
-optional_ptr<CatalogEntry> UCTableSet::RefreshTable(ClientContext &context, const string &table_name) {
-	auto table_info = GetTableInfo(context, schema, table_name);
-	auto table_entry = make_uniq<UCTableEntry>(catalog, schema, *table_info);
-	auto table_ptr = table_entry.get();
-	CreateEntry(std::move(table_entry));
-	return table_ptr;
-}
-
-unique_ptr<UCTableInfo> UCTableSet::GetTableInfo(ClientContext &context, UCSchemaEntry &schema,
-                                                 const string &table_name) {
-	throw NotImplementedException("UCTableSet::CreateTable");
 }
 
 optional_ptr<CatalogEntry> UCTableSet::CreateTable(ClientContext &context, BoundCreateTableInfo &info) {
@@ -82,6 +77,57 @@ void UCTableSet::AlterTable(ClientContext &context, RemoveColumnInfo &info) {
 
 void UCTableSet::AlterTable(ClientContext &context, AlterTableInfo &alter) {
 	throw NotImplementedException("UCTableSet::AlterTable");
+}
+
+optional_ptr<CatalogEntry> UCTableSet::CreateEntry(unique_ptr<CatalogEntry> entry) {
+	lock_guard<mutex> l(entry_lock);
+	auto result = entry.get();
+	if (result->name.empty()) {
+		throw InternalException("UCTableSet::CreateEntry called with empty name");
+	}
+	auto it = tables.find(result->name);
+	if (it != tables.end()) {
+		//! Already exists ??
+		return nullptr;
+	}
+	tables.emplace(result->name, std::move(entry));
+	return result;
+}
+
+optional_ptr<CatalogEntry> UCTableSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup) {
+	if (!is_loaded) {
+		is_loaded = true;
+		LoadEntries(context, lookup);
+	}
+	lock_guard<mutex> l(entry_lock);
+	auto &name = lookup.GetEntryName();
+	auto entry = tables.find(name);
+	if (entry == tables.end()) {
+		return nullptr;
+	}
+	auto &table_info = entry->second;
+	return table_info.dummy.get();
+}
+
+void UCTableSet::ClearEntries() {
+	tables.clear();
+	is_loaded = false;
+}
+
+void UCTableSet::DropEntry(ClientContext &context, DropInfo &info) {
+	throw NotImplementedException("UCTableSet::DropEntry");
+}
+
+void UCTableSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
+	if (!is_loaded) {
+		is_loaded = true;
+		EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, "__DEFAULT__");
+		LoadEntries(context, lookup);
+	}
+	lock_guard<mutex> l(entry_lock);
+	for (auto &table : tables) {
+		callback(*table.second.dummy);
+	}
 }
 
 } // namespace duckdb

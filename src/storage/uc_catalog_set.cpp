@@ -5,65 +5,66 @@
 
 namespace duckdb {
 
-UCCatalogSet::UCCatalogSet(Catalog &catalog) : catalog(catalog), is_loaded(false) {
-}
+//UCCatalogSet::UCCatalogSet(Catalog &catalog) : catalog(catalog) {
+//}
 
-optional_ptr<CatalogEntry> UCCatalogSet::GetEntry(ClientContext &context, const string &name) {
-	if (!is_loaded) {
-		is_loaded = true;
-		LoadEntries(context);
-	}
-	lock_guard<mutex> l(entry_lock);
-	auto entry = entries.find(name);
-	if (entry == entries.end()) {
-		return nullptr;
-	}
-	return entry->second.get();
-}
+//optional_ptr<CatalogEntry> UCCatalogSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup) {
+//	if (!is_loaded) {
+//		is_loaded = true;
+//		LoadEntries(context, lookup);
+//	}
+//	lock_guard<mutex> l(entry_lock);
+//	auto &name = lookup.GetEntryName();
+//	auto entry = entries.find(name);
+//	if (entry == entries.end()) {
+//		return nullptr;
+//	}
+//	return entry->second.get();
+//}
 
-void UCCatalogSet::DropEntry(ClientContext &context, DropInfo &info) {
-	throw NotImplementedException("UCCatalogSet::DropEntry");
-}
+//void UCCatalogSet::DropEntry(ClientContext &context, DropInfo &info) {
+//	throw NotImplementedException("UCCatalogSet::DropEntry");
+//}
 
-void UCCatalogSet::EraseEntryInternal(const string &name) {
-	lock_guard<mutex> l(entry_lock);
-	entries.erase(name);
-}
+//void UCCatalogSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
+//	if (!is_loaded) {
+//		is_loaded = true;
+//		LoadEntries(context);
+//	}
+//	lock_guard<mutex> l(entry_lock);
+//	for (auto &entry : entries) {
+//		callback(*entry.second);
+//	}
+//}
 
-void UCCatalogSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
-	if (!is_loaded) {
-		is_loaded = true;
-		LoadEntries(context);
-	}
-	lock_guard<mutex> l(entry_lock);
-	for (auto &entry : entries) {
-		callback(*entry.second);
-	}
-}
+//optional_ptr<CatalogEntry> UCCatalogSet::CreateEntry(unique_ptr<CatalogEntry> entry) {
+//	lock_guard<mutex> l(entry_lock);
+//	auto result = entry.get();
+//	if (result->name.empty()) {
+//		throw InternalException("UCCatalogSet::CreateEntry called with empty name");
+//	}
+//	entries.insert(make_pair(result->name, std::move(entry)));
+//	return result;
+//}
 
-optional_ptr<CatalogEntry> UCCatalogSet::CreateEntry(unique_ptr<CatalogEntry> entry) {
-	lock_guard<mutex> l(entry_lock);
-	auto result = entry.get();
-	if (result->name.empty()) {
-		throw InternalException("UCCatalogSet::CreateEntry called with empty name");
-	}
-	entries.insert(make_pair(result->name, std::move(entry)));
-	return result;
-}
+//void UCCatalogSet::ClearEntries() {
+//	entries.clear();
+//	is_loaded = false;
+//}
 
-void UCCatalogSet::ClearEntries() {
-	entries.clear();
-	is_loaded = false;
-}
+//UCInSchemaSet::UCInSchemaSet(UCSchemaEntry &schema) : UCCatalogSet(schema.ParentCatalog()), schema(schema) {
+//}
 
-UCInSchemaSet::UCInSchemaSet(UCSchemaEntry &schema) : UCCatalogSet(schema.ParentCatalog()), schema(schema) {
-}
+//optional_ptr<CatalogEntry> UCInSchemaSet::CreateEntry(unique_ptr<CatalogEntry> entry) {
+//	if (!entry->internal) {
+//		entry->internal = schema.internal;
+//	}
+//	return UCCatalogSet::CreateEntry(std::move(entry));
+//}
 
-optional_ptr<CatalogEntry> UCInSchemaSet::CreateEntry(unique_ptr<CatalogEntry> entry) {
-	if (!entry->internal) {
-		entry->internal = schema.internal;
-	}
-	return UCCatalogSet::CreateEntry(std::move(entry));
-}
+//void UCCatalogSet::EraseEntryInternal(const string &name) {
+//	lock_guard<mutex> l(entry_lock);
+//	entries.erase(name);
+//}
 
 } // namespace duckdb

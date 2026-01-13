@@ -44,7 +44,7 @@ public:
 	optional_ptr<CatalogEntry> LookupEntry(CatalogTransaction transaction, const EntryLookupInfo &lookup_info) override;
 
 private:
-	UCCatalogSet &GetCatalogSet(CatalogType type);
+	UCTableSet &GetCatalogSet(CatalogType type);
 
 private:
 	UCTableSet tables;

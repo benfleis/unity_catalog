@@ -7,7 +7,7 @@
 
 namespace duckdb {
 
-UCSchemaSet::UCSchemaSet(Catalog &catalog) : UCCatalogSet(catalog) {
+UCSchemaSet::UCSchemaSet(UCCatalog &catalog) : catalog(catalog) {
 }
 
 static bool IsInternalTable(const string &catalog, const string &schema) {
@@ -17,7 +17,7 @@ static bool IsInternalTable(const string &catalog, const string &schema) {
 	return false;
 }
 
-void UCSchemaSet::LoadEntries(ClientContext &context) {
+void UCSchemaSet::LoadEntries(ClientContext &context, const EntryLookupInfo &lookup) {
 
 	auto &uc_catalog = catalog.Cast<UCCatalog>();
 
@@ -30,6 +30,51 @@ void UCSchemaSet::LoadEntries(ClientContext &context) {
 		auto schema_entry = make_uniq<UCSchemaEntry>(catalog, info);
 		schema_entry->schema_data = make_uniq<UCAPISchema>(schema);
 		CreateEntry(std::move(schema_entry));
+	}
+}
+
+optional_ptr<CatalogEntry> UCSchemaSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup) {
+	if (!is_loaded) {
+		is_loaded = true;
+		LoadEntries(context, lookup);
+	}
+	lock_guard<mutex> l(entry_lock);
+	auto &name = lookup.GetEntryName();
+	auto schema = schemas.find(name);
+	if (schema == schemas.end()) {
+		return nullptr;
+	}
+	return schema->second.get();
+}
+
+optional_ptr<CatalogEntry> UCSchemaSet::CreateEntry(unique_ptr<CatalogEntry> entry) {
+	lock_guard<mutex> l(entry_lock);
+	auto result = entry.get();
+	if (result->name.empty()) {
+		throw InternalException("UCSchemaSet::CreateEntry called with empty name");
+	}
+	schemas.emplace(result->name, unique_ptr_cast<CatalogEntry, SchemaCatalogEntry>(std::move(entry)));
+	return result;
+}
+
+void UCSchemaSet::ClearEntries() {
+	schemas.clear();
+	is_loaded = false;
+}
+
+void UCSchemaSet::DropEntry(ClientContext &context, DropInfo &info) {
+	throw NotImplementedException("UCSchemaSet::DropEntry");
+}
+
+void UCSchemaSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
+	if (!is_loaded) {
+		is_loaded = true;
+		EntryLookupInfo lookup(CatalogType::SCHEMA_ENTRY, "__DEFAULT__");
+		LoadEntries(context, lookup);
+	}
+	lock_guard<mutex> l(entry_lock);
+	for (auto &schema : schemas) {
+		callback(*schema.second);
 	}
 }
 

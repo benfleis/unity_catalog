@@ -14,7 +14,7 @@ namespace duckdb {
 UCCatalog::UCCatalog(AttachedDatabase &db_p, const string &internal_name, AttachOptions &attach_options,
                      UCCredentials credentials, const string &default_schema, string catalog_name_p)
     : Catalog(db_p), internal_name(internal_name), access_mode(attach_options.access_mode),
-      credentials(std::move(credentials)), schemas(*this), default_schema(default_schema), catalog_name(std::move(catalog_name_p)) {
+      credentials(std::move(credentials)), catalog_name(std::move(catalog_name_p)), schemas(*this), default_schema(default_schema) {
 }
 
 UCCatalog::~UCCatalog() = default;
@@ -54,7 +54,7 @@ optional_ptr<SchemaCatalogEntry> UCCatalog::LookupSchema(CatalogTransaction tran
 		}
 		return GetSchema(transaction, default_schema, if_not_found);
 	}
-	auto entry = schemas.GetEntry(transaction.GetContext(), schema_lookup.GetEntryName());
+	auto entry = schemas.GetEntry(transaction.GetContext(), schema_lookup);
 	if (!entry && if_not_found != OnEntryNotFound::RETURN_NULL) {
 		throw BinderException("Schema with name \"%s\" not found", schema_lookup.GetEntryName());
 	}
