@@ -41,7 +41,8 @@ TableFunction UCTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 	table.InternalAttach(context);
 
 	auto &delta_catalog = *table.GetInternalCatalog();
-	auto &schema = delta_catalog.GetSchema(context, table_data->schema_name);
+	//! NOTE: This has to be DEFAULT_SCHEMA, we can't use the table_data->schema
+	auto &schema = delta_catalog.GetSchema(context, DEFAULT_SCHEMA);
 	auto transaction = schema.GetCatalogTransaction(context);
 	auto table_entry = schema.LookupEntry(transaction, lookup_info);
 	D_ASSERT(table_entry);
