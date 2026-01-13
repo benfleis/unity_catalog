@@ -24,6 +24,9 @@ public:
 	optional_ptr<Catalog> GetInternalCatalog();
 	void RefreshCredentials(ClientContext &context);
 	void InternalAttach(ClientContext &context);
+	void InternalDetach(ClientContext &context);
+private:
+	string AttachedCatalogName() const;
 public:
 	UCCatalog &catalog;
 	UCSchemaEntry &schema;
@@ -51,6 +54,7 @@ public:
 	void DropEntry(ClientContext &context, DropInfo &info);
 	void Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback);
 	void ClearEntries();
+	void OnDetach(ClientContext &context);
 
 protected:
 	void LoadEntries(ClientContext &context);

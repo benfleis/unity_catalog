@@ -74,6 +74,7 @@ public:
 
 	DatabaseSize GetDatabaseSize(ClientContext &context) override;
 	string GetDefaultSchema() const override;
+	void OnDetach(ClientContext &context) override;
 
 	//! Whether or not this is an in-memory UC database
 	bool InMemory() override;

@@ -62,7 +62,10 @@ SELECT database_name, schema_name, table_name FROM duckdb_tables() where databas
 Invalid Input Error: Default schema for catalog 'my_catalog' not found. This means auto-detection of default schema failed. Please specify a DEFAULT_SCHEMA on ATTACH: `ATTACH '..' (TYPE unity_catalog, DEFAULT_SCHEMA 'my_schema')`
 
 statement ok
-USE memory; DETACH my_catalog
+USE memory;
+
+statement ok
+DETACH my_catalog
 
 statement ok
 ATTACH 'unity' AS my_catalog (TYPE UNITY_CATALOG, DEFAULT_SCHEMA 'default');

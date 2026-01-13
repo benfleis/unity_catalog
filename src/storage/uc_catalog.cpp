@@ -73,6 +73,14 @@ string UCCatalog::GetDefaultSchema() const {
 	return default_schema;
 }
 
+void UCCatalog::OnDetach(ClientContext &context) {
+	schemas.Scan(context, [&](CatalogEntry &entry) {
+		auto &schema = entry.Cast<UCSchemaEntry>();
+		auto &tables = schema.tables;
+		tables.OnDetach(context);
+	});
+}
+
 DatabaseSize UCCatalog::GetDatabaseSize(ClientContext &context) {
 	if (default_schema.empty()) {
 		throw InvalidInputException("Attempting to fetch the database size - but no database was provided "

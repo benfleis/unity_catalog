@@ -93,6 +93,22 @@ void TableInformation::RefreshCredentials(ClientContext &context) {
 	secret_manager.CreateSecret(context, input);
 }
 
+string TableInformation::AttachedCatalogName() const {
+	auto &schema_name = table_data->schema_name;
+	auto &catalog_name = table_data->catalog_name;
+	auto &name = table_data->name;
+	return "__unity_catalog_internal_" + catalog_name + "_" + schema_name + "_" + name;
+}
+
+void TableInformation::InternalDetach(ClientContext &context) {
+	if (!internal_attached_database) {
+		return;
+	}
+	auto &db_manager = DatabaseManager::Get(context);
+	auto name = AttachedCatalogName();
+	db_manager.DetachDatabase(context, name, OnEntryNotFound::THROW_EXCEPTION);
+}
+
 void TableInformation::InternalAttach(ClientContext &context) {
 	if (internal_attached_database) {
 		return;
@@ -104,7 +120,7 @@ void TableInformation::InternalAttach(ClientContext &context) {
 
 	// Create the attach info for the table
 	AttachInfo info;
-	info.name = "__unity_catalog_internal_" + catalog_name + "_" + schema_name + "_" + name; // TODO:
+	info.name = AttachedCatalogName();
 	info.options = {
 		{"type", Value("Delta")}, {"child_catalog_mode", Value(true)}, {"internal_table_name", Value(name)}};
 	info.path = table_data->storage_location;
@@ -119,6 +135,13 @@ void TableInformation::InternalAttach(ClientContext &context) {
 	internal_db->Initialize(context);
 	internal_db->FinalizeLoad(context);
 	db_manager.FinalizeAttach(context, info, internal_db);
+}
+
+void UCTableSet::OnDetach(ClientContext &context) {
+	for (auto &entry : tables) {
+		auto &table = entry.second;
+		table.InternalDetach(context);
+	}
 }
 
 void UCTableSet::LoadEntries(ClientContext &context) {
