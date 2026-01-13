@@ -93,15 +93,13 @@ PhysicalOperator &UCCatalog::PlanCreateTableAs(ClientContext &context, PhysicalP
 
 PhysicalOperator &UCCatalog::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
                                         optional_ptr<PhysicalOperator> plan) {
-	auto &table = op.table.Cast<UCTableEntry>();
-
+	auto &table_entry = op.table.Cast<UCTableEntry>();
+	auto &table = table_entry.table;
 	// LAZY CREATE ATTACHED DB
-	table.InternalAttach(context, *this);
-
+	table.InternalAttach(context);
 	// LOAD THE INTERNAL TABLE ENTRY
 	auto internal_catalog = table.GetInternalCatalog();
-	table.RefreshCredentials(context, *this);
-
+	table.RefreshCredentials(context);
 	return internal_catalog->PlanInsert(context, planner, op, plan);
 }
 

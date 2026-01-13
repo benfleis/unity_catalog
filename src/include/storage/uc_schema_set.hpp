@@ -28,7 +28,7 @@ public:
 	void ClearEntries();
 
 protected:
-	void LoadEntries(ClientContext &context, const EntryLookupInfo &lookup);
+	void LoadEntries(ClientContext &context);
 private:
 	UCCatalog &catalog;
 	mutex entry_lock;

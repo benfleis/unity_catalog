@@ -17,11 +17,8 @@ static bool IsInternalTable(const string &catalog, const string &schema) {
 	return false;
 }
 
-void UCSchemaSet::LoadEntries(ClientContext &context, const EntryLookupInfo &lookup) {
-
-	auto &uc_catalog = catalog.Cast<UCCatalog>();
-
-	auto tables = UCAPI::GetSchemas(context, uc_catalog, uc_catalog.credentials);
+void UCSchemaSet::LoadEntries(ClientContext &context) {
+	auto tables = UCAPI::GetSchemas(context, catalog, catalog.credentials);
 
 	for (const auto &schema : tables) {
 		CreateSchemaInfo info;
@@ -36,7 +33,7 @@ void UCSchemaSet::LoadEntries(ClientContext &context, const EntryLookupInfo &loo
 optional_ptr<CatalogEntry> UCSchemaSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup) {
 	if (!is_loaded) {
 		is_loaded = true;
-		LoadEntries(context, lookup);
+		LoadEntries(context);
 	}
 	lock_guard<mutex> l(entry_lock);
 	auto &name = lookup.GetEntryName();
@@ -69,8 +66,7 @@ void UCSchemaSet::DropEntry(ClientContext &context, DropInfo &info) {
 void UCSchemaSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
 	if (!is_loaded) {
 		is_loaded = true;
-		EntryLookupInfo lookup(CatalogType::SCHEMA_ENTRY, "__DEFAULT__");
-		LoadEntries(context, lookup);
+		LoadEntries(context);
 	}
 	lock_guard<mutex> l(entry_lock);
 	for (auto &schema : schemas) {

@@ -19,10 +19,19 @@ class UCSchemaEntry;
 
 class TableInformation {
 public:
-	TableInformation(unique_ptr<CatalogEntry> dummy) : dummy(std::move(dummy)) {}
+	TableInformation(UCCatalog &catalog, UCSchemaEntry &schema) : catalog(catalog), schema(schema) {}
 public:
-	optional_ptr<TableCatalogEntry> GetEntry(idx_t version);
+	optional_ptr<CatalogEntry> GetVersion(ClientContext &context, const EntryLookupInfo &lookup);
+	optional_ptr<Catalog> GetInternalCatalog();
+	void RefreshCredentials(ClientContext &context);
+	void InternalAttach(ClientContext &context);
 public:
+	UCCatalog &catalog;
+	UCSchemaEntry &schema;
+	unique_ptr<UCAPITable> table_data;
+	shared_ptr<AttachedDatabase> internal_attached_database;
+	optional_ptr<Transaction> active_transaction;
+
 	mutex entry_lock;
 	//! Map of delta version to TableCatalogEntry for the table
 	unordered_map<idx_t, unique_ptr<CatalogEntry>> schema_versions;
@@ -38,7 +47,6 @@ public:
 public:
 	optional_ptr<CatalogEntry> CreateTable(ClientContext &context, BoundCreateTableInfo &info);
 	void AlterTable(ClientContext &context, AlterTableInfo &info);
-	optional_ptr<CatalogEntry> CreateEntry(unique_ptr<CatalogEntry> entry);
 
 	optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const EntryLookupInfo &lookup);
 	void DropEntry(ClientContext &context, DropInfo &info);
@@ -46,7 +54,7 @@ public:
 	void ClearEntries();
 
 protected:
-	void LoadEntries(ClientContext &context, const EntryLookupInfo &lookup);
+	void LoadEntries(ClientContext &context);
 
 	void AlterTable(ClientContext &context, RenameTableInfo &info);
 	void AlterTable(ClientContext &context, RenameColumnInfo &info);

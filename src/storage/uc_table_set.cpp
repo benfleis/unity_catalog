@@ -14,8 +14,21 @@
 #include "duckdb/parser/constraints/list.hpp"
 #include "storage/uc_schema_entry.hpp"
 #include "duckdb/parser/parser.hpp"
+#include "duckdb/planner/tableref/bound_at_clause.hpp"
+#include "duckdb/main/secret/secret_manager.hpp"
 
 namespace duckdb {
+
+static idx_t ParseDeltaVersionFromAtClause(const BoundAtClause &at_clause) {
+    if (StringUtil::Lower(at_clause.Unit()) != "version") {
+        throw InvalidConfigurationException("Delta tables only support at_clause with unit 'version'");
+    }
+    Value version_value = at_clause.GetValue();
+    if (!version_value.DefaultTryCastAs(LogicalType::UBIGINT, false)) {
+        throw InvalidInputException("Failed to parse version number '%s' into a valid version", at_clause.GetValue().ToString().c_str());
+    }
+    return version_value.GetValue<idx_t>();
+}
 
 UCTableSet::UCTableSet(UCSchemaEntry &schema) : catalog(schema.ParentCatalog().Cast<UCCatalog>()), schema(schema) {
 }
@@ -24,34 +37,120 @@ static ColumnDefinition CreateColumnDefinition(ClientContext &context, UCAPIColu
 	return {coldef.name, UCUtils::TypeToLogicalType(context, coldef.type_text)};
 }
 
-optional_ptr<TableCatalogEntry> TableInformation::GetEntry(idx_t version) {
+optional_ptr<CatalogEntry> TableInformation::GetVersion(ClientContext &context, const EntryLookupInfo &lookup_info) {
 	lock_guard<mutex> l(entry_lock);
+	auto at_clause = lookup_info.GetAtClause();
+	D_ASSERT(at_clause);
+	auto version = ParseDeltaVersionFromAtClause(*at_clause);
 	auto it = schema_versions.find(version);
 	if (it == schema_versions.end()) {
-		return nullptr;
+		InternalAttach(context);
+		auto &delta_catalog = *GetInternalCatalog();
+		RefreshCredentials(context);
+		auto &schema = delta_catalog.GetSchema(context, table_data->schema_name);
+		auto transaction = schema.GetCatalogTransaction(context);
+		auto table_entry = schema.LookupEntry(transaction, lookup_info);
+		auto create_info = table_entry->GetInfo();
+		auto res = schema_versions.emplace(version, make_uniq<UCTableEntry>(catalog, schema, *this, create_info->Cast<CreateTableInfo>()));
+		return res.first->second.get();
 	}
 	auto &entry = it->second;
-	return entry->Cast<TableCatalogEntry>();
+	return entry.get();
 };
 
-void UCTableSet::LoadEntries(ClientContext &context, const EntryLookupInfo &lookup) {
+optional_ptr<Catalog> TableInformation::GetInternalCatalog() {
+	return internal_attached_database->GetCatalog();
+}
+
+void TableInformation::RefreshCredentials(ClientContext &context) {
+	D_ASSERT(table_data);
+	if (table_data->storage_location.find("file://") == 0) {
+		return;
+	}
+	auto &secret_manager = SecretManager::Get(context);
+	// Get Credentials from UCAPI
+	auto table_credentials = UCAPI::GetTableCredentials(context, table_data->table_id, catalog.credentials);
+
+	// Inject secret into secret manager scoped to this path
+	CreateSecretInput input;
+	input.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
+	input.persist_type = SecretPersistType::TEMPORARY;
+	input.name = "__internal_uc_" + table_data->table_id;
+	input.type = "s3";
+	input.provider = "config";
+	input.options = {
+		{"key_id", table_credentials.key_id},
+		{"secret", table_credentials.secret},
+		{"session_token", table_credentials.session_token},
+		{"region", catalog.credentials.aws_region},
+	};
+	input.scope = {table_data->storage_location};
+
+	secret_manager.CreateSecret(context, input);
+}
+
+void TableInformation::InternalAttach(ClientContext &context) {
+	if (internal_attached_database) {
+		return;
+	}
+	auto &db_manager = DatabaseManager::Get(context);
+	auto &schema_name = table_data->schema_name;
+	auto &catalog_name = table_data->catalog_name;
+	auto &name = table_data->name;
+
+	// Create the attach info for the table
+	AttachInfo info;
+	info.name = "__unity_catalog_internal_" + catalog_name + "_" + schema_name + "_" + name; // TODO:
+	info.options = {
+		{"type", Value("Delta")}, {"child_catalog_mode", Value(true)}, {"internal_table_name", Value(name)}};
+	info.path = table_data->storage_location;
+	AttachOptions options(context.db->config.options);
+	options.access_mode = AccessMode::READ_WRITE;
+	options.db_type = "delta";
+
+	auto &internal_db = internal_attached_database;
+	internal_db = db_manager.AttachDatabase(context, info, options);
+
+	//! Initialize the database.
+	internal_db->Initialize(context);
+	internal_db->FinalizeLoad(context);
+	db_manager.FinalizeAttach(context, info, internal_db);
+}
+
+void UCTableSet::LoadEntries(ClientContext &context) {
 	auto &transaction = UCTransaction::Get(context, catalog);
 
 	auto &uc_catalog = catalog.Cast<UCCatalog>();
-	auto tables = UCAPI::GetTables(context, catalog, schema.name, uc_catalog.credentials);
+	auto get_tables_result = UCAPI::GetTables(context, catalog, schema.name, uc_catalog.credentials);
 
-	for (auto &table : tables) {
+	for (auto &table : get_tables_result) {
 		D_ASSERT(schema.name == table.schema_name);
 		CreateTableInfo info;
 		for (auto &col : table.columns) {
 			info.columns.AddColumn(CreateColumnDefinition(context, col));
 		}
 
-		info.table = table.name;
-		auto table_entry = make_uniq<UCTableEntry>(catalog, schema, info);
-		table_entry->table_data = make_uniq<UCAPITable>(table);
+		lock_guard<mutex> l(entry_lock);
+		if (table.name.empty()) {
+			throw InternalException("UCTableSet::CreateEntry called with empty name");
+		}
+		auto it = tables.find(table.name);
+		if (it != tables.end()) {
+			continue;
+		}
 
-		CreateEntry(std::move(table_entry));
+		auto res = tables.emplace(
+			std::piecewise_construct,
+			std::forward_as_tuple(table.name),
+			std::forward_as_tuple(catalog, schema)
+		);
+		auto &table_info = res.first->second;
+
+		info.table = table.name;
+		auto table_entry = make_uniq<UCTableEntry>(catalog, schema, table_info, info);
+
+		table_info.table_data = make_uniq<UCAPITable>(table);
+		table_info.dummy = std::move(table_entry);
 	}
 }
 
@@ -79,25 +178,10 @@ void UCTableSet::AlterTable(ClientContext &context, AlterTableInfo &alter) {
 	throw NotImplementedException("UCTableSet::AlterTable");
 }
 
-optional_ptr<CatalogEntry> UCTableSet::CreateEntry(unique_ptr<CatalogEntry> entry) {
-	lock_guard<mutex> l(entry_lock);
-	auto result = entry.get();
-	if (result->name.empty()) {
-		throw InternalException("UCTableSet::CreateEntry called with empty name");
-	}
-	auto it = tables.find(result->name);
-	if (it != tables.end()) {
-		//! Already exists ??
-		return nullptr;
-	}
-	tables.emplace(result->name, std::move(entry));
-	return result;
-}
-
 optional_ptr<CatalogEntry> UCTableSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup) {
 	if (!is_loaded) {
 		is_loaded = true;
-		LoadEntries(context, lookup);
+		LoadEntries(context);
 	}
 	lock_guard<mutex> l(entry_lock);
 	auto &name = lookup.GetEntryName();
@@ -106,7 +190,12 @@ optional_ptr<CatalogEntry> UCTableSet::GetEntry(ClientContext &context, const En
 		return nullptr;
 	}
 	auto &table_info = entry->second;
-	return table_info.dummy.get();
+	auto at = lookup.GetAtClause();
+	if (!at) {
+		//! No version provided, just return the dummy entry (should represent latest version)
+		return table_info.dummy.get();
+	}
+	return table_info.GetVersion(context, lookup);
 }
 
 void UCTableSet::ClearEntries() {
@@ -121,8 +210,7 @@ void UCTableSet::DropEntry(ClientContext &context, DropInfo &info) {
 void UCTableSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
 	if (!is_loaded) {
 		is_loaded = true;
-		EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, "__DEFAULT__");
-		LoadEntries(context, lookup);
+		LoadEntries(context);
 	}
 	lock_guard<mutex> l(entry_lock);
 	for (auto &table : tables) {
