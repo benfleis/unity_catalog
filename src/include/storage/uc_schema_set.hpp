@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "storage/uc_catalog_set.hpp"
 #include "storage/uc_schema_entry.hpp"
 
 namespace duckdb {
