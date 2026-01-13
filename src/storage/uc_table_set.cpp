@@ -39,9 +39,13 @@ static ColumnDefinition CreateColumnDefinition(ClientContext &context, UCAPIColu
 
 optional_ptr<CatalogEntry> TableInformation::GetVersion(ClientContext &context, const EntryLookupInfo &lookup_info) {
 	lock_guard<mutex> l(entry_lock);
-	auto at_clause = lookup_info.GetAtClause();
-	D_ASSERT(at_clause);
-	auto version = ParseDeltaVersionFromAtClause(*at_clause);
+	auto at = lookup_info.GetAtClause();
+	if (!at) {
+		//! No version provided, just return the dummy entry (should represent latest version)
+		return dummy.get();
+	}
+
+	auto version = ParseDeltaVersionFromAtClause(*at);
 	auto it = schema_versions.find(version);
 	if (it == schema_versions.end()) {
 		InternalAttach(context);
@@ -190,11 +194,6 @@ optional_ptr<CatalogEntry> UCTableSet::GetEntry(ClientContext &context, const En
 		return nullptr;
 	}
 	auto &table_info = entry->second;
-	auto at = lookup.GetAtClause();
-	if (!at) {
-		//! No version provided, just return the dummy entry (should represent latest version)
-		return table_info.dummy.get();
-	}
 	return table_info.GetVersion(context, lookup);
 }
 
