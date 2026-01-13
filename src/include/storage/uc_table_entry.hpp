@@ -38,7 +38,6 @@ struct UCTableInfo {
 class UCTableEntry : public TableCatalogEntry {
 public:
 	UCTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, TableInformation &table, CreateTableInfo &info);
-	//UCTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, UCTableInfo &info);
 
 public:
 	unique_ptr<BaseStatistics> GetStatistics(ClientContext &context, column_t column_id) override;

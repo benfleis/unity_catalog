@@ -17,11 +17,6 @@ UCTableEntry::UCTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, TableIn
 	this->internal = false;
 }
 
-//UCTableEntry::UCTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, UCTableInfo &info)
-//    : TableCatalogEntry(catalog, schema, *info.create_info) {
-//	this->internal = false;
-//}
-
 unique_ptr<BaseStatistics> UCTableEntry::GetStatistics(ClientContext &context, column_t column_id) {
 	return nullptr;
 }
