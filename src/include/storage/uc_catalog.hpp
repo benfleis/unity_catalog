@@ -49,6 +49,9 @@ public:
 	string GetCatalogType() override {
 		return catalog_name;
 	}
+	bool SupportsTimeTravel() const override {
+		return true;
+	}
 
 	optional_ptr<CatalogEntry> CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) override;
 
@@ -71,6 +74,7 @@ public:
 
 	DatabaseSize GetDatabaseSize(ClientContext &context) override;
 	string GetDefaultSchema() const override;
+	void OnDetach(ClientContext &context) override;
 
 	//! Whether or not this is an in-memory UC database
 	bool InMemory() override;

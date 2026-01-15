@@ -14,7 +14,7 @@ namespace duckdb {
 UCCatalog::UCCatalog(AttachedDatabase &db_p, const string &internal_name, AttachOptions &attach_options,
                      UCCredentials credentials, const string &default_schema, string catalog_name_p)
     : Catalog(db_p), internal_name(internal_name), access_mode(attach_options.access_mode),
-      credentials(std::move(credentials)), schemas(*this), default_schema(default_schema), catalog_name(std::move(catalog_name_p)) {
+      credentials(std::move(credentials)), catalog_name(std::move(catalog_name_p)), schemas(*this), default_schema(default_schema) {
 }
 
 UCCatalog::~UCCatalog() = default;
@@ -54,7 +54,7 @@ optional_ptr<SchemaCatalogEntry> UCCatalog::LookupSchema(CatalogTransaction tran
 		}
 		return GetSchema(transaction, default_schema, if_not_found);
 	}
-	auto entry = schemas.GetEntry(transaction.GetContext(), schema_lookup.GetEntryName());
+	auto entry = schemas.GetEntry(transaction.GetContext(), schema_lookup);
 	if (!entry && if_not_found != OnEntryNotFound::RETURN_NULL) {
 		throw BinderException("Schema with name \"%s\" not found", schema_lookup.GetEntryName());
 	}
@@ -71,6 +71,14 @@ string UCCatalog::GetDBPath() {
 
 string UCCatalog::GetDefaultSchema() const {
 	return default_schema;
+}
+
+void UCCatalog::OnDetach(ClientContext &context) {
+	schemas.Scan(context, [&](CatalogEntry &entry) {
+		auto &schema = entry.Cast<UCSchemaEntry>();
+		auto &tables = schema.tables;
+		tables.OnDetach(context);
+	});
 }
 
 DatabaseSize UCCatalog::GetDatabaseSize(ClientContext &context) {
@@ -93,60 +101,13 @@ PhysicalOperator &UCCatalog::PlanCreateTableAs(ClientContext &context, PhysicalP
 
 PhysicalOperator &UCCatalog::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
                                         optional_ptr<PhysicalOperator> plan) {
-	auto &table = op.table.Cast<UCTableEntry>();
-
+	auto &table_entry = op.table.Cast<UCTableEntry>();
+	auto &table = table_entry.table;
 	// LAZY CREATE ATTACHED DB
-	// TODO: move to transaction?
-	if (!table.internal_attached_database) {
-		auto &db_manager = DatabaseManager::Get(context);
-
-		// Create the attach info for the table
-		AttachInfo info;
-		info.name = "__unity_catalog_internal_" + internal_name + "_" + table.schema.name + "_" + table.name; // TODO:
-		info.options = {
-		    {"type", Value("Delta")}, {"child_catalog_mode", Value(true)}, {"internal_table_name", Value(table.name)}};
-		info.path = table.table_data->storage_location;
-		AttachOptions options(context.db->config.options);
-		options.access_mode = AccessMode::READ_WRITE;
-		options.db_type = "delta";
-		auto &internal_db = table.internal_attached_database;
-
-		internal_db = db_manager.AttachDatabase(context, info, options);
-
-		//! Initialize the database.
-		internal_db->Initialize(context);
-		internal_db->FinalizeLoad(context);
-		db_manager.FinalizeAttach(context, info, internal_db);
-	}
-
+	table.InternalAttach(context);
 	// LOAD THE INTERNAL TABLE ENTRY
 	auto internal_catalog = table.GetInternalCatalog();
-
-	// CREATE TMP CREDENTIALS TODO: dedup with getScanFunction
-	auto &table_data = table.table_data;
-	if (table_data->storage_location.find("file://") != 0) {
-		auto &secret_manager = SecretManager::Get(context);
-		// Get Credentials from UCAPI
-		auto table_credentials = UCAPI::GetTableCredentials(context, table_data->table_id, credentials);
-
-		// Inject secret into secret manager sc oped to this path TODO:
-		CreateSecretInput input;
-		input.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
-		input.persist_type = SecretPersistType::TEMPORARY;
-		input.name = "_internal_unity_catalog_" + table_data->table_id;
-		input.type = "s3";
-		input.provider = "config";
-		input.options = {
-		    {"key_id", table_credentials.key_id},
-		    {"secret", table_credentials.secret},
-		    {"session_token", table_credentials.session_token},
-		    {"region", credentials.aws_region},
-		};
-		input.scope = {table_data->storage_location};
-
-		secret_manager.CreateSecret(context, input);
-	}
-
+	table.RefreshCredentials(context);
 	return internal_catalog->PlanInsert(context, planner, op, plan);
 }
 

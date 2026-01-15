@@ -8,36 +8,67 @@
 
 #pragma once
 
-#include "storage/uc_catalog_set.hpp"
 #include "storage/uc_table_entry.hpp"
 
 namespace duckdb {
 struct CreateTableInfo;
 class UCResult;
+class UCCatalog;
 class UCSchemaEntry;
 
-class UCTableSet : public UCInSchemaSet {
+class TableInformation {
+public:
+	TableInformation(UCCatalog &catalog, UCSchemaEntry &schema) : catalog(catalog), schema(schema) {}
+public:
+	optional_ptr<CatalogEntry> GetVersion(ClientContext &context, const EntryLookupInfo &lookup);
+	optional_ptr<Catalog> GetInternalCatalog();
+	void RefreshCredentials(ClientContext &context);
+	void InternalAttach(ClientContext &context);
+	void InternalDetach(ClientContext &context);
+private:
+	string AttachedCatalogName() const;
+public:
+	UCCatalog &catalog;
+	UCSchemaEntry &schema;
+	unique_ptr<UCAPITable> table_data;
+	shared_ptr<AttachedDatabase> internal_attached_database;
+	optional_ptr<Transaction> active_transaction;
+
+	mutex entry_lock;
+	//! Map of delta version to TableCatalogEntry for the table
+	unordered_map<idx_t, unique_ptr<CatalogEntry>> schema_versions;
+	//! Dummy entry created from the "List tables" API result, presumably the latest schema version
+	//! Only used for things like SHOW TABLES
+	unique_ptr<CatalogEntry> dummy;
+};
+
+class UCTableSet {
 public:
 	explicit UCTableSet(UCSchemaEntry &schema);
 
 public:
 	optional_ptr<CatalogEntry> CreateTable(ClientContext &context, BoundCreateTableInfo &info);
-
-	static unique_ptr<UCTableInfo> GetTableInfo(ClientContext &context, UCSchemaEntry &schema,
-	                                            const string &table_name);
-	optional_ptr<CatalogEntry> RefreshTable(ClientContext &context, const string &table_name);
-
 	void AlterTable(ClientContext &context, AlterTableInfo &info);
 
+	optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const EntryLookupInfo &lookup);
+	void DropEntry(ClientContext &context, DropInfo &info);
+	void Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback);
+	void ClearEntries();
+	void OnDetach(ClientContext &context);
+
 protected:
-	void LoadEntries(ClientContext &context) override;
+	void LoadEntries(ClientContext &context);
 
 	void AlterTable(ClientContext &context, RenameTableInfo &info);
 	void AlterTable(ClientContext &context, RenameColumnInfo &info);
 	void AlterTable(ClientContext &context, AddColumnInfo &info);
 	void AlterTable(ClientContext &context, RemoveColumnInfo &info);
-
-	static void AddColumn(ClientContext &context, UCResult &result, UCTableInfo &table_info, idx_t column_offset = 0);
+private:
+	UCCatalog &catalog;
+	UCSchemaEntry &schema;
+	mutex entry_lock;
+	case_insensitive_map_t<TableInformation> tables;
+	bool is_loaded = false;
 };
 
 } // namespace duckdb
