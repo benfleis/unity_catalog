@@ -151,7 +151,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 	loader.RegisterFunction(mysql_secret_function);
 
 	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
-	config.storage_extensions["uc_catalog"] = make_uniq<UCCatalogStorageExtension>();
+	StorageExtension::Register(config, "uc_catalog", make_shared_ptr<UCCatalogStorageExtension>());
 }
 
 void UcCatalogExtension::Load(ExtensionLoader &loader) {

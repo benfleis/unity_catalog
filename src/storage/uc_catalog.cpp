@@ -112,11 +112,6 @@ PhysicalOperator &UCCatalog::PlanInsert(ClientContext &context, PhysicalPlanGene
 		auto &internal_db = table.internal_attached_database;
 
 		internal_db = db_manager.AttachDatabase(context, info, options);
-
-		//! Initialize the database.
-		internal_db->Initialize(context);
-		internal_db->FinalizeLoad(context);
-		db_manager.FinalizeAttach(context, info, internal_db);
 	}
 
 	// LOAD THE INTERNAL TABLE ENTRY
