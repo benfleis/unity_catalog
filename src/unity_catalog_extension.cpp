@@ -13,7 +13,7 @@
 
 namespace duckdb {
 
-template <bool SHORT_NAME=false>
+template <bool SHORT_NAME = false>
 static unique_ptr<BaseSecret> CreateUCSecretFunction(ClientContext &, CreateSecretInput &input) {
 	// apply any overridden settings
 	vector<string> prefix_paths;
@@ -68,7 +68,7 @@ unique_ptr<SecretEntry> GetSecret(ClientContext &context, const string &secret_n
 	return nullptr;
 }
 
-template <bool DEPRECATED_NAME=false>
+template <bool DEPRECATED_NAME = false>
 static unique_ptr<Catalog> UCCatalogAttach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
                                            AttachedDatabase &db, const string &name, AttachInfo &info,
                                            AttachOptions &attach_options) {
@@ -185,10 +185,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 	loader.RegisterFunction(mysql_secret_function_deprecated);
 
 	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
-	config.storage_extensions["unity_catalog"] = make_uniq<UnityCatalogStorageExtension<false>>();
-
+	StorageExtension::Register(config, "unity_catalog", make_shared_ptr<UCCatalogStorageExtension>());
 	// Also register the (deprecated) alias
-	config.storage_extensions["uc_catalog"] = make_uniq<UnityCatalogStorageExtension<false>>();
+	StorageExtension::Register(config, "uc_catalog", make_shared_ptr<UCCatalogStorageExtension>());
 }
 
 void UnityCatalogExtension::Load(ExtensionLoader &loader) {

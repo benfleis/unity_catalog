@@ -14,7 +14,8 @@ namespace duckdb {
 UCCatalog::UCCatalog(AttachedDatabase &db_p, const string &internal_name, AttachOptions &attach_options,
                      UCCredentials credentials, const string &default_schema, string catalog_name_p)
     : Catalog(db_p), internal_name(internal_name), access_mode(attach_options.access_mode),
-      credentials(std::move(credentials)), catalog_name(std::move(catalog_name_p)), schemas(*this), default_schema(default_schema) {
+      credentials(std::move(credentials)), catalog_name(std::move(catalog_name_p)), schemas(*this),
+      default_schema(default_schema) {
 }
 
 UCCatalog::~UCCatalog() = default;
@@ -104,7 +105,24 @@ PhysicalOperator &UCCatalog::PlanInsert(ClientContext &context, PhysicalPlanGene
 	auto &table_entry = op.table.Cast<UCTableEntry>();
 	auto &table = table_entry.table;
 	// LAZY CREATE ATTACHED DB
-	table.InternalAttach(context);
+	// TODO: move to transaction?
+	if (!table.internal_attached_database) {
+		auto &db_manager = DatabaseManager::Get(context);
+
+		// Create the attach info for the table
+		AttachInfo info;
+		info.name = "__uc_catalog_internal_" + internal_name + "_" + table.schema.name + "_" + table.name; // TODO:
+		info.options = {
+		    {"type", Value("Delta")}, {"child_catalog_mode", Value(true)}, {"internal_table_name", Value(table.name)}};
+		info.path = table.table_data->storage_location;
+		AttachOptions options(context.db->config.options);
+		options.access_mode = AccessMode::READ_WRITE;
+		options.db_type = "delta";
+		auto &internal_db = table.internal_attached_database;
+
+		internal_db = db_manager.AttachDatabase(context, info, options);
+	}
+
 	// LOAD THE INTERNAL TABLE ENTRY
 	auto internal_catalog = table.GetInternalCatalog();
 	table.RefreshCredentials(context);
