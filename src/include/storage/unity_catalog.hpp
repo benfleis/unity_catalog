@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DuckDB
 //
-// storage/uc_catalog.hpp
+// storage/unity_catalog.hpp
 //
 //
 //===----------------------------------------------------------------------===//
@@ -32,11 +32,11 @@ public:
 	static void ClearCacheOnSetting(ClientContext &context, SetScope scope, Value &parameter);
 };
 
-class UCCatalog : public Catalog {
+class UnityCatalog : public Catalog {
 public:
-	explicit UCCatalog(AttachedDatabase &db_p, const string &internal_name, AttachOptions &attach_options,
+	explicit UnityCatalog(AttachedDatabase &db_p, const string &internal_name, AttachOptions &attach_options,
 	                   UCCredentials credentials, const string &default_schema);
-	~UCCatalog();
+	~UnityCatalog();
 
 	string internal_name;
 	AccessMode access_mode;

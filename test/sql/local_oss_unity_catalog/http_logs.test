@@ -4,7 +4,7 @@
 
 require parquet
 
-require uc_catalog
+require unity_catalog
 
 require delta
 
@@ -25,7 +25,7 @@ CREATE SECRET (
 
 # Catalog Secret
 statement ok
-ATTACH 'unity' AS my_catalog (TYPE UC_CATALOG);
+ATTACH 'unity' AS my_catalog (TYPE unity_catalog);
 
 # We can now query the tables in the schema!
 query I

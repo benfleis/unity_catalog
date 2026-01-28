@@ -1,14 +1,14 @@
-#include "storage/uc_catalog_set.hpp"
+#include "storage/unity_catalog_set.hpp"
 #include "storage/uc_transaction.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "storage/uc_schema_entry.hpp"
 
 namespace duckdb {
 
-UCCatalogSet::UCCatalogSet(Catalog &catalog) : catalog(catalog), is_loaded(false) {
+UnityCatalogSet::UnityCatalogSet(Catalog &catalog) : catalog(catalog), is_loaded(false) {
 }
 
-optional_ptr<CatalogEntry> UCCatalogSet::GetEntry(ClientContext &context, const string &name) {
+optional_ptr<CatalogEntry> UnityCatalogSet::GetEntry(ClientContext &context, const string &name) {
 	if (!is_loaded) {
 		is_loaded = true;
 		LoadEntries(context);
@@ -21,16 +21,16 @@ optional_ptr<CatalogEntry> UCCatalogSet::GetEntry(ClientContext &context, const 
 	return entry->second.get();
 }
 
-void UCCatalogSet::DropEntry(ClientContext &context, DropInfo &info) {
-	throw NotImplementedException("UCCatalogSet::DropEntry");
+void UnityCatalogSet::DropEntry(ClientContext &context, DropInfo &info) {
+	throw NotImplementedException("UnityCatalogSet::DropEntry");
 }
 
-void UCCatalogSet::EraseEntryInternal(const string &name) {
+void UnityCatalogSet::EraseEntryInternal(const string &name) {
 	lock_guard<mutex> l(entry_lock);
 	entries.erase(name);
 }
 
-void UCCatalogSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
+void UnityCatalogSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
 	if (!is_loaded) {
 		is_loaded = true;
 		LoadEntries(context);
@@ -41,29 +41,29 @@ void UCCatalogSet::Scan(ClientContext &context, const std::function<void(Catalog
 	}
 }
 
-optional_ptr<CatalogEntry> UCCatalogSet::CreateEntry(unique_ptr<CatalogEntry> entry) {
+optional_ptr<CatalogEntry> UnityCatalogSet::CreateEntry(unique_ptr<CatalogEntry> entry) {
 	lock_guard<mutex> l(entry_lock);
 	auto result = entry.get();
 	if (result->name.empty()) {
-		throw InternalException("UCCatalogSet::CreateEntry called with empty name");
+		throw InternalException("UnityCatalogSet::CreateEntry called with empty name");
 	}
 	entries.insert(make_pair(result->name, std::move(entry)));
 	return result;
 }
 
-void UCCatalogSet::ClearEntries() {
+void UnityCatalogSet::ClearEntries() {
 	entries.clear();
 	is_loaded = false;
 }
 
-UCInSchemaSet::UCInSchemaSet(UCSchemaEntry &schema) : UCCatalogSet(schema.ParentCatalog()), schema(schema) {
+UCInSchemaSet::UCInSchemaSet(UCSchemaEntry &schema) : UnityCatalogSet(schema.ParentCatalog()), schema(schema) {
 }
 
 optional_ptr<CatalogEntry> UCInSchemaSet::CreateEntry(unique_ptr<CatalogEntry> entry) {
 	if (!entry->internal) {
 		entry->internal = schema.internal;
 	}
-	return UCCatalogSet::CreateEntry(std::move(entry));
+	return UnityCatalogSet::CreateEntry(std::move(entry));
 }
 
 } // namespace duckdb

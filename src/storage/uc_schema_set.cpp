@@ -1,5 +1,5 @@
 #include "storage/uc_schema_set.hpp"
-#include "storage/uc_catalog.hpp"
+#include "storage/unity_catalog.hpp"
 #include "uc_api.hpp"
 #include "storage/uc_transaction.hpp"
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"
@@ -7,7 +7,7 @@
 
 namespace duckdb {
 
-UCSchemaSet::UCSchemaSet(Catalog &catalog) : UCCatalogSet(catalog) {
+UCSchemaSet::UCSchemaSet(Catalog &catalog) : UnityCatalogSet(catalog) {
 }
 
 static bool IsInternalTable(const string &catalog, const string &schema) {
@@ -19,9 +19,9 @@ static bool IsInternalTable(const string &catalog, const string &schema) {
 
 void UCSchemaSet::LoadEntries(ClientContext &context) {
 
-	auto &uc_catalog = catalog.Cast<UCCatalog>();
+	auto &unity_catalog = catalog.Cast<UnityCatalog>();
 
-	auto tables = UCAPI::GetSchemas(context, uc_catalog, uc_catalog.credentials);
+	auto tables = UCAPI::GetSchemas(context, unity_catalog, unity_catalog.credentials);
 
 	for (const auto &schema : tables) {
 		CreateSchemaInfo info;

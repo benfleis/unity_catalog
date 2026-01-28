@@ -1,7 +1,7 @@
 #include "uc_api.hpp"
 #include "uc_utils.hpp"
 
-#include "storage/uc_catalog.hpp"
+#include "storage/unity_catalog.hpp"
 #include "storage/uc_table_set.hpp"
 #include "storage/uc_transaction.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
@@ -27,10 +27,10 @@ static ColumnDefinition CreateColumnDefinition(ClientContext &context, UCAPIColu
 void UCTableSet::LoadEntries(ClientContext &context) {
 	auto &transaction = UCTransaction::Get(context, catalog);
 
-	auto &uc_catalog = catalog.Cast<UCCatalog>();
+	auto &unity_catalog = catalog.Cast<UnityCatalog>();
 
 	// TODO: handle out-of-order columns using position property
-	auto tables = UCAPI::GetTables(context, catalog, schema.name, uc_catalog.credentials);
+	auto tables = UCAPI::GetTables(context, catalog, schema.name, unity_catalog.credentials);
 
 	for (auto &table : tables) {
 		D_ASSERT(schema.name == table.schema_name);

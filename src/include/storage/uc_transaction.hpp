@@ -11,7 +11,7 @@
 #include "duckdb/transaction/transaction.hpp"
 
 namespace duckdb {
-class UCCatalog;
+class UnityCatalog;
 class UCSchemaEntry;
 class UCTableEntry;
 
@@ -19,7 +19,7 @@ enum class UCTransactionState { TRANSACTION_NOT_YET_STARTED, TRANSACTION_STARTED
 
 class UCTransaction : public Transaction {
 public:
-	UCTransaction(UCCatalog &uc_catalog, TransactionManager &manager, ClientContext &context);
+	UCTransaction(UnityCatalog &unity_catalog, TransactionManager &manager, ClientContext &context);
 	~UCTransaction() override;
 
 	void Start();

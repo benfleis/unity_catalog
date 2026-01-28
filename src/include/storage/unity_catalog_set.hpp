@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DuckDB
 //
-// storage/uc_catalog_set.hpp
+// storage/unity_catalog_set.hpp
 //
 //
 //===----------------------------------------------------------------------===//
@@ -17,9 +17,9 @@ struct DropInfo;
 class UCSchemaEntry;
 class UCTransaction;
 
-class UCCatalogSet {
+class UnityCatalogSet {
 public:
-	UCCatalogSet(Catalog &catalog);
+	UnityCatalogSet(Catalog &catalog);
 
 	optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const string &name);
 	virtual void DropEntry(ClientContext &context, DropInfo &info);
@@ -41,7 +41,7 @@ private:
 	bool is_loaded;
 };
 
-class UCInSchemaSet : public UCCatalogSet {
+class UCInSchemaSet : public UnityCatalogSet {
 public:
 	UCInSchemaSet(UCSchemaEntry &schema);
 

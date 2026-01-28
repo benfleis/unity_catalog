@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "storage/uc_catalog_set.hpp"
+#include "storage/unity_catalog_set.hpp"
 #include "storage/uc_table_entry.hpp"
 
 namespace duckdb {

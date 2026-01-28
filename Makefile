@@ -1,7 +1,7 @@
 PROJ_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 # Configuration of extension
-EXT_NAME=uc_catalog
+EXT_NAME=unity_catalog
 EXT_CONFIG=${PROJ_DIR}extension_config.cmake
 
 # Core extensions that we need for crucial testing

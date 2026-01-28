@@ -6,10 +6,10 @@
 #include "duckdb/parser/parsed_data/attach_info.hpp"
 #include "duckdb/storage/storage_extension.hpp"
 
-#include "storage/uc_catalog.hpp"
+#include "storage/unity_catalog.hpp"
 #include "storage/uc_transaction_manager.hpp"
 #include "uc_api.hpp"
-#include "uc_catalog_extension.hpp"
+#include "unity_catalog_extension.hpp"
 
 namespace duckdb {
 
@@ -59,7 +59,7 @@ unique_ptr<SecretEntry> GetSecret(ClientContext &context, const string &secret_n
 	return nullptr;
 }
 
-static unique_ptr<Catalog> UCCatalogAttach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
+static unique_ptr<Catalog> UnityCatalogAttach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
                                            AttachedDatabase &db, const string &name, AttachInfo &info,
                                            AttachOptions &attach_options) {
 	UCCredentials credentials;
@@ -121,19 +121,19 @@ static unique_ptr<Catalog> UCCatalogAttach(optional_ptr<StorageExtensionInfo> st
 		}
 	}
 
-	return make_uniq<UCCatalog>(db, info.path, attach_options, credentials, default_schema);
+	return make_uniq<UnityCatalog>(db, info.path, attach_options, credentials, default_schema);
 }
 
 static unique_ptr<TransactionManager> CreateTransactionManager(optional_ptr<StorageExtensionInfo> storage_info,
                                                                AttachedDatabase &db, Catalog &catalog) {
-	auto &uc_catalog = catalog.Cast<UCCatalog>();
-	return make_uniq<UCTransactionManager>(db, uc_catalog);
+	auto &unity_catalog = catalog.Cast<UnityCatalog>();
+	return make_uniq<UCTransactionManager>(db, unity_catalog);
 }
 
-class UCCatalogStorageExtension : public StorageExtension {
+class UnityCatalogStorageExtension : public StorageExtension {
 public:
-	UCCatalogStorageExtension() {
-		attach = UCCatalogAttach;
+	UnityCatalogStorageExtension() {
+		attach = UnityCatalogAttach;
 		create_transaction_manager = CreateTransactionManager;
 	}
 };
@@ -151,21 +151,21 @@ static void LoadInternal(ExtensionLoader &loader) {
 	loader.RegisterFunction(mysql_secret_function);
 
 	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
-	StorageExtension::Register(config, "uc_catalog", make_shared_ptr<UCCatalogStorageExtension>());
+	StorageExtension::Register(config, "unity_catalog", make_shared_ptr<UnityCatalogStorageExtension>());
 }
 
-void UcCatalogExtension::Load(ExtensionLoader &loader) {
+void UnityCatalogExtension::Load(ExtensionLoader &loader) {
 	LoadInternal(loader);
 }
-std::string UcCatalogExtension::Name() {
-	return "uc_catalog";
+std::string UnityCatalogExtension::Name() {
+	return "unity_catalog";
 }
 
 } // namespace duckdb
 
 extern "C" {
 
-DUCKDB_CPP_EXTENSION_ENTRY(uc_catalog, loader) {
+DUCKDB_CPP_EXTENSION_ENTRY(unity_catalog, loader) {
 	duckdb::LoadInternal(loader);
 }
 }

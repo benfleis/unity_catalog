@@ -1,4 +1,4 @@
-#include "storage/uc_catalog.hpp"
+#include "storage/unity_catalog.hpp"
 #include "storage/uc_schema_entry.hpp"
 #include "storage/uc_table_entry.hpp"
 #include "storage/uc_transaction.hpp"
@@ -51,7 +51,7 @@ TableFunction UCTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 	auto &delta_function_set = catalog_entry->Cast<TableFunctionCatalogEntry>();
 
 	auto delta_scan_function = delta_function_set.functions.GetFunctionByArguments(context, {LogicalType::VARCHAR});
-	auto &uc_catalog = catalog.Cast<UCCatalog>();
+	auto &unity_catalog = catalog.Cast<UnityCatalog>();
 
 	D_ASSERT(table_data);
 
@@ -66,7 +66,7 @@ TableFunction UCTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 	if (table_data->storage_location.find("file://") != 0) {
 		auto &secret_manager = SecretManager::Get(context);
 		// Get Credentials from UCAPI
-		auto table_credentials = UCAPI::GetTableCredentials(context, table_data->table_id, uc_catalog.credentials);
+		auto table_credentials = UCAPI::GetTableCredentials(context, table_data->table_id, unity_catalog.credentials);
 
 		// Inject secret into secret manager scoped to this path
 		CreateSecretInput input;
@@ -79,7 +79,7 @@ TableFunction UCTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 		    {"key_id", table_credentials.key_id},
 		    {"secret", table_credentials.secret},
 		    {"session_token", table_credentials.session_token},
-		    {"region", uc_catalog.credentials.aws_region},
+		    {"region", unity_catalog.credentials.aws_region},
 		};
 		input.scope = {table_data->storage_location};
 

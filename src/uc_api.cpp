@@ -7,7 +7,7 @@
 #include "duckdb/main/extension_helper.hpp"
 
 #include "uc_api.hpp"
-#include "storage/uc_catalog.hpp"
+#include "storage/unity_catalog.hpp"
 #include "yyjson.hpp"
 
 namespace duckdb {

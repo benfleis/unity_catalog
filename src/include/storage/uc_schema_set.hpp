@@ -8,13 +8,13 @@
 
 #pragma once
 
-#include "storage/uc_catalog_set.hpp"
+#include "storage/unity_catalog_set.hpp"
 #include "storage/uc_schema_entry.hpp"
 
 namespace duckdb {
 struct CreateSchemaInfo;
 
-class UCSchemaSet : public UCCatalogSet {
+class UCSchemaSet : public UnityCatalogSet {
 public:
 	explicit UCSchemaSet(Catalog &catalog);
 

@@ -150,7 +150,7 @@ optional_ptr<CatalogEntry> UCSchemaEntry::LookupEntry(CatalogTransaction transac
 	return GetCatalogSet(lookup_info.GetCatalogType()).GetEntry(transaction.GetContext(), lookup_info.GetEntryName());
 }
 
-UCCatalogSet &UCSchemaEntry::GetCatalogSet(CatalogType type) {
+UnityCatalogSet &UCSchemaEntry::GetCatalogSet(CatalogType type) {
 	switch (type) {
 	case CatalogType::TABLE_ENTRY:
 	case CatalogType::VIEW_ENTRY:
