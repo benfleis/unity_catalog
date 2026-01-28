@@ -6,7 +6,7 @@
 #include "duckdb/parser/parsed_data/attach_info.hpp"
 #include "duckdb/storage/storage_extension.hpp"
 
-#include "storage/uc_catalog.hpp"
+#include "storage/unity_catalog.hpp"
 #include "storage/uc_transaction_manager.hpp"
 #include "uc_api.hpp"
 #include "unity_catalog_extension.hpp"
@@ -140,7 +140,7 @@ static unique_ptr<Catalog> UCCatalogAttach(optional_ptr<StorageExtensionInfo> st
 
 	string catalog_name;
 	if (DEPRECATED_NAME) {
-		catalog_name = "uc_catalog";
+		catalog_name = "unity_catalog";
 	} else {
 		catalog_name = "unity_catalog";
 	}
@@ -149,8 +149,8 @@ static unique_ptr<Catalog> UCCatalogAttach(optional_ptr<StorageExtensionInfo> st
 
 static unique_ptr<TransactionManager> CreateTransactionManager(optional_ptr<StorageExtensionInfo> storage_info,
                                                                AttachedDatabase &db, Catalog &catalog) {
-	auto &uc_catalog = catalog.Cast<UCCatalog>();
-	return make_uniq<UCTransactionManager>(db, uc_catalog);
+	auto &unity_catalog = catalog.Cast<UCCatalog>();
+	return make_uniq<UCTransactionManager>(db, unity_catalog);
 }
 
 template <bool DEPRECATED_NAME>
@@ -187,7 +187,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
 	StorageExtension::Register(config, "unity_catalog", make_shared_ptr<UCCatalogStorageExtension>());
 	// Also register the (deprecated) alias
-	StorageExtension::Register(config, "uc_catalog", make_shared_ptr<UCCatalogStorageExtension>());
+	StorageExtension::Register(config, "unity_catalog", make_shared_ptr<UCCatalogStorageExtension>());
 }
 
 void UnityCatalogExtension::Load(ExtensionLoader &loader) {

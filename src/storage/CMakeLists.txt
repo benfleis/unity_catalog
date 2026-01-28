@@ -1,6 +1,6 @@
 add_library(
   uc_ext_storage OBJECT
-  uc_catalog.cpp
+  unity_catalog.cpp
   uc_clear_cache.cpp
   uc_schema_entry.cpp
   uc_schema_set.cpp

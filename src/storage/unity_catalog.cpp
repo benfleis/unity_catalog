@@ -1,4 +1,4 @@
-#include "storage/uc_catalog.hpp"
+#include "storage/unity_catalog.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"
@@ -111,7 +111,7 @@ PhysicalOperator &UCCatalog::PlanInsert(ClientContext &context, PhysicalPlanGene
 
 		// Create the attach info for the table
 		AttachInfo info;
-		info.name = "__uc_catalog_internal_" + internal_name + "_" + table.schema.name + "_" + table.name; // TODO:
+		info.name = "__unity_catalog_internal_" + internal_name + "_" + table.schema.name + "_" + table.name; // TODO:
 		info.options = {
 		    {"type", Value("Delta")}, {"child_catalog_mode", Value(true)}, {"internal_table_name", Value(table.name)}};
 		info.path = table.table_data->storage_location;

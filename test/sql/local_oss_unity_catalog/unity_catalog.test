@@ -1,4 +1,4 @@
-# name: test/sql/local_oss_unity_catalog/uc_catalog.test
+# name: test/sql/local_oss_unity_catalog/unity_catalog.test
 # description: test unity_catalog extension
 # group: [local_oss_unity_catalog]
 

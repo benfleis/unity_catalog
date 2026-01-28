@@ -12,7 +12,7 @@
 #include "storage/uc_schema_entry.hpp"
 #include "storage/uc_table_entry.hpp"
 #include "storage/uc_transaction.hpp"
-#include "storage/uc_catalog.hpp"
+#include "storage/unity_catalog.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/parser/parsed_data/create_index_info.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"

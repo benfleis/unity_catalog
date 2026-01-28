@@ -3,7 +3,7 @@
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/main/attached_database.hpp"
-#include "storage/uc_catalog.hpp"
+#include "storage/unity_catalog.hpp"
 
 namespace duckdb {
 
