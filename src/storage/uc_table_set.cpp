@@ -1,7 +1,7 @@
 #include "uc_api.hpp"
 #include "uc_utils.hpp"
 
-#include "storage/uc_catalog.hpp"
+#include "storage/unity_catalog.hpp"
 #include "storage/uc_table_set.hpp"
 #include "storage/uc_transaction.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
@@ -130,11 +130,6 @@ void TableInformation::InternalAttach(ClientContext &context) {
 
 	auto &internal_db = internal_attached_database;
 	internal_db = db_manager.AttachDatabase(context, info, options);
-
-	//! Initialize the database.
-	internal_db->Initialize(context);
-	internal_db->FinalizeLoad(context);
-	db_manager.FinalizeAttach(context, info, internal_db);
 }
 
 void UCTableSet::OnDetach(ClientContext &context) {
@@ -147,8 +142,8 @@ void UCTableSet::OnDetach(ClientContext &context) {
 void UCTableSet::LoadEntries(ClientContext &context) {
 	auto &transaction = UCTransaction::Get(context, catalog);
 
-	auto &uc_catalog = catalog.Cast<UCCatalog>();
-	auto get_tables_result = UCAPI::GetTables(context, catalog, schema.name, uc_catalog.credentials);
+	auto &unity_catalog = catalog.Cast<UCCatalog>();
+	auto get_tables_result = UCAPI::GetTables(context, catalog, schema.name, unity_catalog.credentials);
 
 	for (auto &table : get_tables_result) {
 		D_ASSERT(schema.name == table.schema_name);

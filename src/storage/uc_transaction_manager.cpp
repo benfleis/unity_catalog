@@ -3,12 +3,12 @@
 
 namespace duckdb {
 
-UCTransactionManager::UCTransactionManager(AttachedDatabase &db_p, UCCatalog &uc_catalog)
-    : TransactionManager(db_p), uc_catalog(uc_catalog) {
+UCTransactionManager::UCTransactionManager(AttachedDatabase &db_p, UCCatalog &unity_catalog)
+    : TransactionManager(db_p), unity_catalog(unity_catalog) {
 }
 
 Transaction &UCTransactionManager::StartTransaction(ClientContext &context) {
-	auto transaction = make_uniq<UCTransaction>(uc_catalog, *this, context);
+	auto transaction = make_uniq<UCTransaction>(unity_catalog, *this, context);
 	transaction->Start();
 	auto &result = *transaction;
 	lock_guard<mutex> l(transaction_lock);

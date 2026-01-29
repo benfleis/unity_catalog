@@ -6,14 +6,14 @@
 #include "duckdb/parser/parsed_data/attach_info.hpp"
 #include "duckdb/storage/storage_extension.hpp"
 
-#include "storage/uc_catalog.hpp"
+#include "storage/unity_catalog.hpp"
 #include "storage/uc_transaction_manager.hpp"
 #include "uc_api.hpp"
 #include "unity_catalog_extension.hpp"
 
 namespace duckdb {
 
-template <bool SHORT_NAME=false>
+template <bool SHORT_NAME = false>
 static unique_ptr<BaseSecret> CreateUCSecretFunction(ClientContext &, CreateSecretInput &input) {
 	// apply any overridden settings
 	vector<string> prefix_paths;
@@ -68,7 +68,7 @@ unique_ptr<SecretEntry> GetSecret(ClientContext &context, const string &secret_n
 	return nullptr;
 }
 
-template <bool DEPRECATED_NAME=false>
+template <bool DEPRECATED_NAME = false>
 static unique_ptr<Catalog> UCCatalogAttach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
                                            AttachedDatabase &db, const string &name, AttachInfo &info,
                                            AttachOptions &attach_options) {
@@ -149,14 +149,14 @@ static unique_ptr<Catalog> UCCatalogAttach(optional_ptr<StorageExtensionInfo> st
 
 static unique_ptr<TransactionManager> CreateTransactionManager(optional_ptr<StorageExtensionInfo> storage_info,
                                                                AttachedDatabase &db, Catalog &catalog) {
-	auto &uc_catalog = catalog.Cast<UCCatalog>();
-	return make_uniq<UCTransactionManager>(db, uc_catalog);
+	auto &unity_catalog = catalog.Cast<UCCatalog>();
+	return make_uniq<UCTransactionManager>(db, unity_catalog);
 }
 
 template <bool DEPRECATED_NAME>
-class UnityCatalogStorageExtension : public StorageExtension {
+class UCCatalogStorageExtension : public StorageExtension {
 public:
-	UnityCatalogStorageExtension() {
+	UCCatalogStorageExtension() {
 		attach = UCCatalogAttach<DEPRECATED_NAME>;
 		create_transaction_manager = CreateTransactionManager;
 	}
@@ -185,10 +185,10 @@ static void LoadInternal(ExtensionLoader &loader) {
 	loader.RegisterFunction(mysql_secret_function_deprecated);
 
 	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
-	config.storage_extensions["unity_catalog"] = make_uniq<UnityCatalogStorageExtension<false>>();
-
+	auto extension = make_shared_ptr<UCCatalogStorageExtension<false>>();
+	StorageExtension::Register(config, "unity_catalog", extension);
 	// Also register the (deprecated) alias
-	config.storage_extensions["uc_catalog"] = make_uniq<UnityCatalogStorageExtension<false>>();
+	StorageExtension::Register(config, "uc_catalog", extension);
 }
 
 void UnityCatalogExtension::Load(ExtensionLoader &loader) {

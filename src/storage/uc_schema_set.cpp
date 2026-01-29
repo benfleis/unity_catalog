@@ -1,5 +1,5 @@
 #include "storage/uc_schema_set.hpp"
-#include "storage/uc_catalog.hpp"
+#include "storage/unity_catalog.hpp"
 #include "uc_api.hpp"
 #include "storage/uc_transaction.hpp"
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"

@@ -1,4 +1,4 @@
-#include "storage/uc_catalog.hpp"
+#include "storage/unity_catalog.hpp"
 #include "storage/uc_schema_entry.hpp"
 #include "storage/uc_table_entry.hpp"
 #include "storage/uc_table_set.hpp"
