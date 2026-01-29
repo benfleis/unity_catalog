@@ -1,6 +1,7 @@
 #include "storage/unity_catalog.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/parser/parsed_data/attach_info.hpp"
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/planner/operator/logical_insert.hpp"
@@ -111,9 +112,11 @@ PhysicalOperator &UCCatalog::PlanInsert(ClientContext &context, PhysicalPlanGene
 
 		// Create the attach info for the table
 		AttachInfo info;
-		info.name = "__unity_catalog_internal_" + internal_name + "_" + table.schema.name + "_" + table.name; // TODO:
-		info.options = {
-		    {"type", Value("Delta")}, {"child_catalog_mode", Value(true)}, {"internal_table_name", Value(table.name)}};
+		info.name =
+		    "__unity_catalog_internal_" + internal_name + "_" + table.schema.name + "_" + table_entry.name; // TODO:
+		info.options = {{"type", Value("Delta")},
+		                {"child_catalog_mode", Value(true)},
+		                {"internal_table_name", Value(table_entry.name)}};
 		info.path = table.table_data->storage_location;
 		AttachOptions options(context.db->config.options);
 		options.access_mode = AccessMode::READ_WRITE;

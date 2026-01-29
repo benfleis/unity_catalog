@@ -140,7 +140,7 @@ static unique_ptr<Catalog> UCCatalogAttach(optional_ptr<StorageExtensionInfo> st
 
 	string catalog_name;
 	if (DEPRECATED_NAME) {
-		catalog_name = "unity_catalog";
+		catalog_name = "uc_catalog";
 	} else {
 		catalog_name = "unity_catalog";
 	}
@@ -154,9 +154,9 @@ static unique_ptr<TransactionManager> CreateTransactionManager(optional_ptr<Stor
 }
 
 template <bool DEPRECATED_NAME>
-class UnityCatalogStorageExtension : public StorageExtension {
+class UCCatalogStorageExtension : public StorageExtension {
 public:
-	UnityCatalogStorageExtension() {
+	UCCatalogStorageExtension() {
 		attach = UCCatalogAttach<DEPRECATED_NAME>;
 		create_transaction_manager = CreateTransactionManager;
 	}
@@ -185,9 +185,10 @@ static void LoadInternal(ExtensionLoader &loader) {
 	loader.RegisterFunction(mysql_secret_function_deprecated);
 
 	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
-	StorageExtension::Register(config, "unity_catalog", make_shared_ptr<UCCatalogStorageExtension>());
+	auto extension = make_shared_ptr<UCCatalogStorageExtension<false>>();
+	StorageExtension::Register(config, "unity_catalog", extension);
 	// Also register the (deprecated) alias
-	StorageExtension::Register(config, "unity_catalog", make_shared_ptr<UCCatalogStorageExtension>());
+	StorageExtension::Register(config, "uc_catalog", extension);
 }
 
 void UnityCatalogExtension::Load(ExtensionLoader &loader) {
