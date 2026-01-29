@@ -9,6 +9,8 @@ concurrency:
 defaults:
   run:
     shell: bash
+env:
+  VCPKG_COMMIT_ID: 84bab45d415d22042bd0b9081aea57f362da3f35
 
 jobs:
   databricks-tests-linux:
@@ -45,7 +47,7 @@ jobs:
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11.1
         with:
-          vcpkgGitCommitId: ce613c41372b23b1f51333815feb3edd87ef8a8b
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
 
       - name: Configure OpenSSL for Rust
         run: |
