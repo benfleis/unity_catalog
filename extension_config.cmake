@@ -8,6 +8,6 @@ duckdb_extension_load(unity_catalog
 
 duckdb_extension_load(delta
     GIT_URL https://github.com/duckdb/duckdb-delta
-    GIT_TAG ce6c4b289a0e5aac68a3eacf364cb78c320d03b2
+    GIT_TAG 0e8892c8708329dddb618306e4f35eac0b0764bf
     SUBMODULES extension-ci-tools
 )
