@@ -10,6 +10,7 @@ DEFAULT_TEST_EXTENSION_DEPS=parquet;httpfs;tpch;tpcds
 #FULL_TEST_EXTENSION_DEPS=tpcds;tpch TODO: add
 
 ENV_DATABRICKS_CMD ?= scripts/run_databricks_env
+BUILD_DIR ?= ./build/release
 
 # Include the Makefile from extension-ci-tools
 include extension-ci-tools/makefiles/duckdb_extension.Makefile
@@ -34,7 +35,7 @@ test_data_prepare: venv
 
 # Runs the regular databricks tests (non-write) with credentials from 1password
 run_databricks_tests:
-	${ENV_DATABRICKS_CMD} ./build/debug/test/unittest "test/sql/databricks/*"
+	${ENV_DATABRICKS_CMD} $(BUILD_DIR)/test/unittest "test/sql/databricks/*"
 
 ################################################
 # Databricks Write Tests
@@ -54,7 +55,7 @@ write_tests_prepare: venv
 	./venv/bin/python3 scripts/databricks_data_gen/generate_databricks_test_data.py copy ${DATABRICKS_WRITE_TEST_CATALOG}.source ${DATABRICKS_WRITE_TEST_CATALOG}.${DATABRICKS_WRITE_TEST_SCHEMA} --catalog-managed
 
 write_tests_run:
-	./build/debug/test/unittest "test/sql/databricks/write_tests/*"
+	$(BUILD_DIR)/test/unittest "test/sql/databricks/write_tests/*"
 
 write_tests_cleanup:
 	./venv/bin/python3 scripts/databricks_data_gen/clean_test_data.py ${DATABRICKS_WRITE_TEST_CATALOG}.${DATABRICKS_WRITE_TEST_SCHEMA}
