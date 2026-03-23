@@ -58,6 +58,8 @@ jobs:
         build/sbt package
         bin/start-uc-server | tee uc.log &
         sleep 15 # should be quite fast, capture initial output in GH logs
+        # some tests require manual inspection of files whose location incorrectly recorded; fake it
+        env -C /tmp ln -sf "$PWD/etc/data/external/unity/default/tables/marksheet_uniform"
 
     - name: Build extension
       run: |

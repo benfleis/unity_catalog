@@ -3,7 +3,6 @@
 
 #include "storage/unity_catalog.hpp"
 #include "storage/uc_table_set.hpp"
-#include "storage/uc_transaction.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/parser/constraints/not_null_constraint.hpp"
 #include "duckdb/parser/constraints/unique_constraint.hpp"
@@ -39,29 +38,42 @@ static ColumnDefinition CreateColumnDefinition(ClientContext &context, UCAPIColu
 }
 
 optional_ptr<CatalogEntry> TableInformation::GetVersion(ClientContext &context, const EntryLookupInfo &lookup_info) {
-	lock_guard<mutex> l(entry_lock);
 	auto at = lookup_info.GetAtClause();
 	if (!at) {
 		//! No version provided, just return the dummy entry (should represent latest version)
+		lock_guard<mutex> l(entry_lock);
 		return dummy.get();
 	}
 
 	auto version = ParseDeltaVersionFromAtClause(*at);
-	auto it = schema_versions.find(version);
-	if (it == schema_versions.end()) {
-		InternalAttach(context);
-		auto &delta_catalog = *GetInternalCatalog();
-		RefreshCredentials(context);
-		auto &schema = delta_catalog.GetSchema(context, table_data->schema_name);
-		auto transaction = schema.GetCatalogTransaction(context);
-		auto table_entry = schema.LookupEntry(transaction, lookup_info);
-		auto create_info = table_entry->GetInfo();
-		auto res = schema_versions.emplace(
-		    version, make_uniq<UCTableEntry>(catalog, schema, *this, create_info->Cast<CreateTableInfo>()));
-		return res.first->second.get();
+
+	// Fast path: already cached
+	{
+		lock_guard<mutex> l(entry_lock);
+		auto it = schema_versions.find(version);
+		if (it != schema_versions.end()) {
+			return it->second.get();
+		}
 	}
-	auto &entry = it->second;
-	return entry.get();
+
+	// Not cached: attach and fetch schema — done outside entry_lock since it may block on I/O
+	InternalAttach(context);
+	RefreshCredentials(context);
+	auto &delta_catalog = *GetInternalCatalog();
+	auto &schema = delta_catalog.GetSchema(context, table_data->schema_name);
+	auto transaction = schema.GetCatalogTransaction(context);
+	auto table_entry = schema.LookupEntry(transaction, lookup_info);
+	auto create_info = table_entry->GetInfo();
+
+	lock_guard<mutex> l(entry_lock);
+	// Re-check under lock in case another thread raced us here
+	auto it = schema_versions.find(version);
+	if (it != schema_versions.end()) {
+		return it->second.get();
+	}
+	auto res = schema_versions.emplace(
+	    version, make_uniq<UCTableEntry>(catalog, schema, *this, create_info->Cast<CreateTableInfo>()));
+	return res.first->second.get();
 };
 
 optional_ptr<Catalog> TableInformation::GetInternalCatalog() {
@@ -75,7 +87,8 @@ void TableInformation::RefreshCredentials(ClientContext &context) {
 	}
 	auto &secret_manager = SecretManager::Get(context);
 	// Get Credentials from UCAPI
-	auto table_credentials = UCAPI::GetTableCredentials(context, table_data->table_id, catalog.credentials);
+	auto table_credentials = UCAPI::GetTableCredentials(
+	    context, table_data->table_id, !(catalog.access_mode == AccessMode::READ_ONLY), catalog.credentials);
 
 	// Inject secret into secret manager scoped to this path
 	CreateSecretInput input;
@@ -102,16 +115,64 @@ string TableInformation::AttachedCatalogName() const {
 	return "__unity_catalog_internal_" + catalog_name + "_" + schema_name + "_" + name;
 }
 
-void TableInformation::InternalDetach(ClientContext &context) {
+void TableInformation::InternalDetach(ClientContext &context, const lock_guard<mutex> &_attach_lock) {
 	if (!internal_attached_database) {
 		return;
 	}
 	auto &db_manager = DatabaseManager::Get(context);
 	auto name = AttachedCatalogName();
 	db_manager.DetachDatabase(context, name, OnEntryNotFound::THROW_EXCEPTION);
+	internal_attached_database = nullptr;
+}
+
+void TableInformation::MarkDirty() {
+	lock_guard<mutex> l(attach_lock);
+	is_dirty = true;
+}
+
+bool TableInformation::IsCCV2() const {
+	// Check for the preview setting
+	auto it = table_data->properties.find("delta.feature.catalogOwned-preview");
+	if (it != table_data->properties.end() && it->second == "supported") {
+		return true;
+	}
+
+	// Check for the GA setting
+	it = table_data->properties.find("delta.feature.catalogManaged");
+	return it != table_data->properties.end() && it->second == "supported";
+}
+
+Value TableInformation::BuildLogTail(ClientContext &context) {
+	auto &uc_catalog = catalog.Cast<UnityCatalog>();
+	auto commits =
+	    UCAPI::GetCommits(context, table_data->table_id, table_data->storage_location, uc_catalog.credentials);
+
+	vector<Value> commit_values;
+	for (const auto &commit : commits.commits) {
+		child_list_t<Value> commit_struct;
+		commit_struct.push_back(make_pair("version", Value::BIGINT(commit.version)));
+		commit_struct.push_back(make_pair("timestamp", Value::BIGINT(commit.timestamp)));
+		commit_struct.push_back(make_pair(
+		    "file_name", Value(table_data->storage_location + "/_delta_log/_staged_commits/" + commit.file_name)));
+		commit_struct.push_back(make_pair("file_size", Value::BIGINT(commit.file_size)));
+		commit_struct.push_back(
+		    make_pair("file_modification_timestamp", Value::BIGINT(commit.file_modification_timestamp)));
+		commit_values.push_back(Value::STRUCT(std::move(commit_struct)));
+	}
+
+	return Value::LIST(
+	    LogicalType::STRUCT({make_pair("version", LogicalType::BIGINT), make_pair("timestamp", LogicalType::BIGINT),
+	                         make_pair("file_name", LogicalType::VARCHAR), make_pair("file_size", LogicalType::BIGINT),
+	                         make_pair("file_modification_timestamp", LogicalType::BIGINT)}),
+	    commit_values);
 }
 
 void TableInformation::InternalAttach(ClientContext &context) {
+	lock_guard<mutex> l(attach_lock);
+	if (is_dirty) {
+		InternalDetach(context, l);
+		is_dirty = false;
+	}
 	if (internal_attached_database) {
 		return;
 	}
@@ -121,9 +182,22 @@ void TableInformation::InternalAttach(ClientContext &context) {
 	// Create the attach info for the table
 	AttachInfo info;
 	info.name = AttachedCatalogName();
-	info.options = {
-	    {"type", Value("Delta")}, {"child_catalog_mode", Value(true)}, {"internal_table_name", Value(name)}};
+	info.options = {{"type", Value("Delta")},
+	                {"child_catalog_mode", Value(true)},
+	                {"internal_table_name", Value(name)},
+	                {"unity_table_id", Value(table_data->table_id)}};
 	info.path = table_data->storage_location;
+
+	if (IsCCV2()) {
+		auto log_tail = BuildLogTail(context);
+		info.options["parent_catalog"] = Value(catalog.GetName());
+		info.options["parent_catalog_schema"] = Value(schema.name);
+		info.options["parent_commit"] = Value(true);
+		if (!log_tail.IsNull()) {
+			info.options["log_tail"] = log_tail;
+		}
+	}
+
 	AttachOptions options(context.db->config.options);
 	options.access_mode = AccessMode::READ_WRITE;
 	options.db_type = "delta";
@@ -135,7 +209,8 @@ void TableInformation::InternalAttach(ClientContext &context) {
 void UCTableSet::OnDetach(ClientContext &context) {
 	for (auto &entry : tables) {
 		auto &table = entry.second;
-		table.InternalDetach(context);
+		lock_guard<mutex> l(table.attach_lock);
+		table.InternalDetach(context, l);
 	}
 }
 
@@ -148,10 +223,7 @@ void TableInformation::InternalCheckpoint(ClientContext &context, bool force) {
 }
 
 void UCTableSet::CheckpointTable(ClientContext &context, const string &table_name, bool force) {
-	if (!is_loaded) {
-		LoadEntries(context);
-		is_loaded = true;
-	}
+	EnsureLoaded(context);
 	auto it = tables.find(table_name);
 	if (it == tables.end()) {
 		throw InvalidInputException("Table '%s' not found", table_name);
@@ -173,7 +245,7 @@ void UCTableSet::Checkpoint(ClientContext &context, bool force) {
 }
 #endif
 
-void UCTableSet::LoadEntries(ClientContext &context) {
+void UCTableSet::LoadEntries(ClientContext &context, const lock_guard<mutex> &_entry_lock) {
 	auto &unity_catalog = catalog.Cast<UnityCatalog>();
 	auto get_tables_result = UCAPI::GetTables(context, catalog, schema.name, unity_catalog.credentials);
 
@@ -205,6 +277,14 @@ void UCTableSet::LoadEntries(ClientContext &context) {
 	}
 }
 
+void UCTableSet::EnsureLoaded(ClientContext &context) {
+	lock_guard<mutex> l(load_lock);
+	if (!is_loaded) {
+		LoadEntries(context, l); // acquires entry_lock internally; fine, load_lock != entry_lock
+		is_loaded = true;        // set only after LoadEntries succeeds
+	}
+}
+
 optional_ptr<CatalogEntry> UCTableSet::CreateTable(ClientContext &context, BoundCreateTableInfo &info) {
 	throw NotImplementedException("UCTableSet::CreateTable");
 }
@@ -230,10 +310,7 @@ void UCTableSet::AlterTable(ClientContext &context, AlterTableInfo &alter) {
 }
 
 optional_ptr<CatalogEntry> UCTableSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup) {
-	if (!is_loaded) {
-		is_loaded = true;
-		LoadEntries(context);
-	}
+	EnsureLoaded(context);
 	lock_guard<mutex> l(entry_lock);
 	auto &name = lookup.GetEntryName();
 	auto entry = tables.find(name);
@@ -245,6 +322,8 @@ optional_ptr<CatalogEntry> UCTableSet::GetEntry(ClientContext &context, const En
 }
 
 void UCTableSet::ClearEntries() {
+	lock_guard<mutex> ll(load_lock);
+	lock_guard<mutex> le(entry_lock);
 	tables.clear();
 	is_loaded = false;
 }
@@ -254,10 +333,7 @@ void UCTableSet::DropEntry(ClientContext &context, DropInfo &info) {
 }
 
 void UCTableSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
-	if (!is_loaded) {
-		is_loaded = true;
-		LoadEntries(context);
-	}
+	EnsureLoaded(context);
 	lock_guard<mutex> l(entry_lock);
 	for (auto &table : tables) {
 		callback(*table.second.dummy);
