@@ -87,6 +87,10 @@ static unique_ptr<Catalog> UnityCatalogAttach(optional_ptr<StorageExtensionInfo>
 			secret_name = entry.second.ToString();
 		} else if (lower_name == "default_schema") {
 			default_schema = entry.second.ToString();
+		} else if (lower_name == "scan_plan_endpoint") {
+			// NOTE: POC
+			credentials.scan_plan_endpoint = entry.second.ToString();
+			StringUtil::RTrim(credentials.scan_plan_endpoint, "/");
 		} else {
 			throw BinderException("Unrecognized option for UC attach: %s", entry.first);
 		}

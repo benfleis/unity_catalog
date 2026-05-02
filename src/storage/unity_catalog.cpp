@@ -96,6 +96,18 @@ void UnityCatalog::ClearCache() {
 	schemas.ClearEntries();
 }
 
+string UnityCatalog::GetScanPlanEndpoint() {
+	if (scan_plan_unavailable.load()) {
+		return "";
+	}
+	if (!credentials.scan_plan_endpoint.empty()) {
+		return credentials.scan_plan_endpoint;
+	}
+	// Auto-detect: try the main UC endpoint. GetScanFunction will set
+	// scan_plan_unavailable on failure so we don't retry a dead path.
+	return credentials.endpoint;
+}
+
 PhysicalOperator &UnityCatalog::PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner,
                                                   LogicalCreateTable &op, PhysicalOperator &plan) {
 	throw NotImplementedException("UnityCatalog PlanCreateTableAs");

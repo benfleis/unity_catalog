@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <atomic>
+
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/common/enums/access_mode.hpp"
@@ -20,9 +22,8 @@ class UCSchemaEntry;
 struct UCCredentials {
 	string endpoint;
 	string token;
-
-	// Not really part of the credentials, but required to query s3 tables
-	string aws_region;
+	string aws_region; // not really credentials; required to query S3 tables
+	string scan_plan_endpoint; // explicitly set via attach option; empty = probe on first use
 };
 
 class UCClearCacheFunction : public TableFunction {
@@ -90,12 +91,21 @@ public:
 
 	void ClearCache();
 
+	// Returns the scan plan endpoint to use for this catalog, or "" to skip scan planning.
+	// On the first successful PlanTableScan the caller should do nothing; on any failure
+	// the caller should set scan_plan_unavailable = true so subsequent queries skip the
+	// scan plan path entirely.
+	string GetScanPlanEndpoint();
+
 private:
 	void DropSchema(ClientContext &context, DropInfo &info) override;
 
 private:
 	UCSchemaSet schemas;
 	string default_schema;
+
+	// Set to true by GetScanFunction on any scan plan failure to skip the path permanently.
+	std::atomic<bool> scan_plan_unavailable {false};
 };
 
 } // namespace duckdb
