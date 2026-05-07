@@ -457,39 +457,10 @@ static UCScanDeleteFile ParseDeleteFile(duckdb_yyjson::yyjson_val *del_val) {
 	return df;
 }
 
-static UCScanPlanResult ParseScanPlanResponse(const string &json_str) {
-	YYJsonDoc doc(json_str);
-	auto *root = doc.Root();
-	if (!root) {
-		throw IOException("Failed to parse scan plan response");
-	}
-
-	UCScanPlanResult result;
-	string status_str = TryGetStrFromObject(root, "status");
-	if (status_str == "completed") {
-		result.status = UCScanPlanStatus::COMPLETED;
-	} else if (status_str == "submitted") {
-		result.status = UCScanPlanStatus::SUBMITTED;
-	} else if (status_str == "failed") {
-		result.status = UCScanPlanStatus::FAILED;
-	} else if (status_str == "cancelled") {
-		result.status = UCScanPlanStatus::CANCELLED;
-	}
-	result.plan_id = TryGetStrFromObject(root, "plan-id", false);
-
-	if (result.status == UCScanPlanStatus::FAILED) {
-		auto *error_obj = yyjson_obj_get(root, "error");
-		if (error_obj) {
-			result.error_message = TryGetStrFromObject(error_obj, "message", false);
-			result.error_type = TryGetStrFromObject(error_obj, "type", false);
-		}
-		return result;
-	}
-
-	if (result.status != UCScanPlanStatus::COMPLETED) {
-		return result;
-	}
-
+// Parses the ScanTasks payload fields (delete-files, file-scan-tasks, plan-tasks,
+// storage-credentials) from a JSON root into an existing result struct.
+// Used by both ParseScanPlanResponse (completed path) and FetchScanTasks.
+static void ParseScanTasksPayload(duckdb_yyjson::yyjson_val *root, UCScanPlanResult &result) {
 	auto *del_files = yyjson_obj_get(root, "delete-files");
 	if (del_files) {
 		size_t idx, max;
@@ -544,7 +515,42 @@ static UCScanPlanResult ParseScanPlanResponse(const string &json_str) {
 			result.storage_credentials.emplace_back(prefix, string());
 		}
 	}
+}
 
+static UCScanPlanResult ParseScanPlanResponse(const string &json_str) {
+	YYJsonDoc doc(json_str);
+	auto *root = doc.Root();
+	if (!root) {
+		throw IOException("Failed to parse scan plan response");
+	}
+
+	UCScanPlanResult result;
+	string status_str = TryGetStrFromObject(root, "status");
+	if (status_str == "completed") {
+		result.status = UCScanPlanStatus::COMPLETED;
+	} else if (status_str == "submitted") {
+		result.status = UCScanPlanStatus::SUBMITTED;
+	} else if (status_str == "failed") {
+		result.status = UCScanPlanStatus::FAILED;
+	} else if (status_str == "cancelled") {
+		result.status = UCScanPlanStatus::CANCELLED;
+	}
+	result.plan_id = TryGetStrFromObject(root, "plan-id", false);
+
+	if (result.status == UCScanPlanStatus::FAILED) {
+		auto *error_obj = yyjson_obj_get(root, "error");
+		if (error_obj) {
+			result.error_message = TryGetStrFromObject(error_obj, "message", false);
+			result.error_type = TryGetStrFromObject(error_obj, "type", false);
+		}
+		return result;
+	}
+
+	if (result.status != UCScanPlanStatus::COMPLETED) {
+		return result;
+	}
+
+	ParseScanTasksPayload(root, result);
 	return result;
 }
 
@@ -578,6 +584,34 @@ UCScanPlanResult UCAPI::PlanTableScan(ClientContext &ctx, const string &catalog_
 		                             scan_plan_endpoint);
 	}
 
+	return result;
+}
+
+UCScanPlanResult UCAPI::FetchScanTasks(ClientContext &ctx, const string &catalog_name, const string &schema_name,
+                                       const string &table_name, const string &plan_task,
+                                       const UCCredentials &credentials, const string &scan_plan_endpoint) {
+	string url = scan_plan_endpoint + "/v1/catalogs/" + catalog_name + "/namespaces/" + schema_name + "/tables/" +
+	             table_name + "/tasks";
+	// Body is {"plan-task":"<token>"}; token is opaque so we escape it as a JSON string manually.
+	string escaped;
+	for (char c : plan_task) {
+		if (c == '"' || c == '\\') {
+			escaped += '\\';
+		}
+		escaped += c;
+	}
+	string body = "{\"plan-task\":\"" + escaped + "\"}";
+	auto resp = MakeRequest(ctx, url, credentials.token, body);
+
+	// FetchScanTasksResult is a bare ScanTasks object — no status field.
+	YYJsonDoc doc(resp);
+	auto *root = doc.Root();
+	if (!root) {
+		throw IOException("Failed to parse fetchScanTasks response from '%s'", url);
+	}
+	UCScanPlanResult result;
+	result.status = UCScanPlanStatus::COMPLETED;
+	ParseScanTasksPayload(root, result);
 	return result;
 }
 

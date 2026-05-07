@@ -267,7 +267,21 @@ static void UCScanPlanPushdownFilter(ClientContext &context, LogicalGet &get, Fu
 		auto plan = UCAPI::PlanTableScan(context, bd.catalog_name, bd.schema_name, bd.table_name,
 		                                 bd.credentials, bd.scan_plan_endpoint, filter_json);
 
-		if (plan.status == UCScanPlanStatus::COMPLETED && !plan.file_scan_tasks.empty()) {
+		if (plan.status == UCScanPlanStatus::COMPLETED) {
+			// Resolve any plan-task tokens before binding parquet_scan.
+			// Note: FetchScanTasks is called eagerly here (post-optimizer, filters already sent
+			// to the server in PlanTableScan).  True lazy streaming via Delta's MultiFileList
+			// would require a different bind-time hook and would forfeit filter pushdown.
+			for (auto &token : plan.plan_tasks) {
+				auto batch = UCAPI::FetchScanTasks(context, bd.catalog_name, bd.schema_name,
+				                                   bd.table_name, token, bd.credentials,
+				                                   bd.scan_plan_endpoint);
+				for (auto &task : batch.file_scan_tasks) {
+					plan.file_scan_tasks.push_back(std::move(task));
+				}
+			}
+			plan.plan_tasks.clear();
+
 			auto &sys_cat   = Catalog::GetSystemCatalog(context);
 			auto &pq_entry  = sys_cat.GetEntry<TableFunctionCatalogEntry>(context, DEFAULT_SCHEMA, "parquet_scan");
 			auto parquet_fn = pq_entry.functions.GetFunctionByArguments(context,

@@ -383,6 +383,22 @@ When multiple filters are present, wrap them in `{"type":"and","left":...,"right
 
 ---
 
+## OSS Unity Catalog default tables
+
+Catalog `unity`, schema `default`. Used by the mock server and integration tests.
+
+| Table | Columns | Notes |
+|---|---|---|
+| `marksheet` | `id INT, name VARCHAR, marks INT` | Managed Delta; 100 rows (id 1–100, marks = id×3) |
+| `marksheet_uniform` | `id INT, name VARCHAR, marks INT` | External Delta (Uniform Iceberg); same schema/data as marksheet |
+| `numbers` | `as_int INT, as_double DOUBLE` | External Delta |
+| `user_countries` | `first_name VARCHAR, age BIGINT, country VARCHAR` | External Delta; partitioned by `country` |
+
+Mock server generates 2 Parquet files per table (rows 1–50 and 51–100) in
+`uc/data/scan-plan-testdata/<table>/part{1,2}.parquet`.
+
+---
+
 ## Verification
 
 1. **Mock — happy path**

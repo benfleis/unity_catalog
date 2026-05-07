@@ -159,6 +159,12 @@ public:
 	                                            const string &schema_name, const string &table_name,
 	                                            const string &plan_id, const UCCredentials &credentials,
 	                                            const string &scan_plan_endpoint);
+	// IRC spec: fetchScanTasks — POST .../tasks. Exchanges one plan-task token for file-scan-tasks.
+	// The response is a ScanTasks payload (no status field); result.status is always COMPLETED on success.
+	static UCScanPlanResult FetchScanTasks(ClientContext &ctx, const string &catalog_name,
+	                                       const string &schema_name, const string &table_name,
+	                                       const string &plan_task, const UCCredentials &credentials,
+	                                       const string &scan_plan_endpoint);
 };
 
 } // namespace duckdb

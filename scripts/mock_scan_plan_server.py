@@ -2,90 +2,163 @@
 """
 Mock IRC scan plan server for POC testing.
 
-Implements the three scan-planning endpoints with canned responses.
-Logs the received filter JSON on every POST so the serialization can be eyeballed.
-
-Startup: generates two small Parquet test files in testdata/ (requires duckdb Python package).
+Generates small Parquet test files whose schemas match the OSS Unity Catalog default tables
+(marksheet, marksheet_uniform, numbers, user_countries).  Serves them via the three
+scan-planning endpoints, routing by table name.
 
 Usage:
-    python tools/mock_scan_plan_server.py [--port 8081] [--async-first]
+    python uc/scripts/mock_scan_plan_server.py [--port 8081] [--async-first]
+                                               [--plan-tasks-table <name>]
 
-    --async-first   First POST returns "submitted"; the subsequent GET returns "completed".
-                    Use this to exercise the polling loop.
+    --async-first          First POST /plan returns "submitted"; the subsequent GET returns
+                           "completed".  Exercises the polling loop.
+    --plan-tasks-table     Table name that returns plan-tasks tokens instead of inline
+                           file-scan-tasks (default: plan_tasks_table).
+
+Table routing:
+    marksheet              → inline file-scan-tasks, marksheet schema
+    marksheet_uniform      → inline file-scan-tasks, marksheet schema
+    numbers                → inline file-scan-tasks, numbers schema
+    user_countries         → inline file-scan-tasks, user_countries schema
+    <plan-tasks-table>     → plan-tasks tokens; POST /tasks resolves each token to one file
+    (any other name)       → falls back to marksheet data
 """
 
 import argparse
 import json
-import os
-import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
-
-# ---------------------------------------------------------------------------
-# Test data
-# ---------------------------------------------------------------------------
 
 TESTDATA_DIR = Path(__file__).parent.parent / "data" / "scan-plan-testdata"
 
-FILE_SCAN_TASKS = []  # populated by ensure_testdata()
+# table_name → [FileScanTask, ...]  (inline file-scan-tasks)
+TABLE_SCAN_TASKS: dict = {}
+
+# plan-tasks-table name → {token: [FileScanTask]}
+PLAN_TASK_MAP: dict = {}
+PLAN_TASKS_TABLE = "plan_tasks_table"  # overridden by --plan-tasks-table
+
+# ---------------------------------------------------------------------------
+# Data generation
+# ---------------------------------------------------------------------------
+
+TABLE_QUERIES = {
+    "marksheet": (
+        "SELECT i::INTEGER AS id, 'name_'||i::VARCHAR AS name, (i*3)::INTEGER AS marks"
+        " FROM range({start}, {end}) t(i)"
+    ),
+    "marksheet_uniform": (
+        "SELECT i::INTEGER AS id, 'name_'||i::VARCHAR AS name, (i*3)::INTEGER AS marks"
+        " FROM range({start}, {end}) t(i)"
+    ),
+    "numbers": (
+        "SELECT i::INTEGER AS as_int, i::DOUBLE AS as_double"
+        " FROM range({start}, {end}) t(i)"
+    ),
+    "user_countries": (
+        "SELECT 'user_'||i::VARCHAR AS first_name,"
+        "       (20 + (i % 50))::BIGINT AS age,"
+        "       (['US','UK','CA','AU','DE'])[1 + (i % 5)] AS country"
+        " FROM range({start}, {end}) t(i)"
+    ),
+}
+
+
+def _make_task(path: Path) -> dict:
+    return {
+        "data-file": {
+            "content": "data",
+            "file-path": str(path.resolve()),
+            "file-format": "parquet",
+            "spec-id": 0,
+            "partition": [],
+            "file-size-in-bytes": path.stat().st_size,
+            "record-count": 50,
+        }
+    }
 
 
 def ensure_testdata():
     import duckdb
 
     TESTDATA_DIR.mkdir(parents=True, exist_ok=True)
-    part1 = TESTDATA_DIR / "part1.parquet"
-    part2 = TESTDATA_DIR / "part2.parquet"
 
-    if not part1.exists() or not part2.exists():
-        con = duckdb.connect()
-        # Schema matches OSS UC default table unity.default.marksheet (id INT, name STRING, marks INT)
-        con.execute(
-            f"COPY (SELECT i::INTEGER AS id, 'name_' || i::VARCHAR AS name, (i * 3)::INTEGER AS marks "
-            f"FROM range(1, 51) t(i)) TO '{part1}' (FORMAT parquet)"
+    con = duckdb.connect()
+
+    for tbl, query_tmpl in TABLE_QUERIES.items():
+        tbl_dir = TESTDATA_DIR / tbl
+        tbl_dir.mkdir(exist_ok=True)
+        part1 = tbl_dir / "part1.parquet"
+        part2 = tbl_dir / "part2.parquet"
+
+        if not part1.exists() or not part2.exists():
+            con.execute(
+                f"COPY ({query_tmpl.format(start=1, end=51)}) TO '{part1}' (FORMAT parquet)"
+            )
+            con.execute(
+                f"COPY ({query_tmpl.format(start=51, end=101)}) TO '{part2}' (FORMAT parquet)"
+            )
+            print(f"Generated {part1} and {part2}")
+
+        TABLE_SCAN_TASKS[tbl] = [_make_task(part1), _make_task(part2)]
+
+    con.close()
+
+    # plan-tasks table: reuse marksheet files, split one-per-token
+    pt_dir = TESTDATA_DIR / PLAN_TASKS_TABLE
+    pt_dir.mkdir(exist_ok=True)
+    ms_query = TABLE_QUERIES["marksheet"]
+    pt1 = pt_dir / "part1.parquet"
+    pt2 = pt_dir / "part2.parquet"
+    if not pt1.exists() or not pt2.exists():
+        con2 = duckdb.connect()
+        con2.execute(
+            f"COPY ({ms_query.format(start=1, end=51)}) TO '{pt1}' (FORMAT parquet)"
         )
-        con.execute(
-            f"COPY (SELECT i::INTEGER AS id, 'name_' || i::VARCHAR AS name, (i * 3)::INTEGER AS marks "
-            f"FROM range(51, 101) t(i)) TO '{part2}' (FORMAT parquet)"
+        con2.execute(
+            f"COPY ({ms_query.format(start=51, end=101)}) TO '{pt2}' (FORMAT parquet)"
         )
-        con.close()
-        print(f"Generated {part1} and {part2}")
+        con2.close()
+        print(f"Generated {pt1} and {pt2}")
 
-    def make_task(path):
-        return {
-            "data-file": {
-                "content": "data",
-                "file-path": str(path.resolve()),
-                "file-format": "parquet",
-                "spec-id": 0,
-                "partition": [],
-                "file-size-in-bytes": path.stat().st_size,
-                "record-count": 50,
-            }
-        }
+    PLAN_TASK_MAP[PLAN_TASKS_TABLE] = {
+        "mock-plan-task-1": [_make_task(pt1)],
+        "mock-plan-task-2": [_make_task(pt2)],
+    }
 
-    FILE_SCAN_TASKS.clear()
-    FILE_SCAN_TASKS.extend([make_task(part1), make_task(part2)])
-    print(f"Serving {len(FILE_SCAN_TASKS)} file-scan-tasks from {TESTDATA_DIR}")
+    print(f"\nServing {len(TABLE_SCAN_TASKS)} tables from {TESTDATA_DIR}")
+    for t, tasks in TABLE_SCAN_TASKS.items():
+        print(f"  {t}: {len(tasks)} file-scan-tasks")
+    print(f"  {PLAN_TASKS_TABLE}: plan-tasks (2 tokens)")
 
 
 # ---------------------------------------------------------------------------
-# Canned responses
+# Response helpers
 # ---------------------------------------------------------------------------
 
-COMPLETED_BODY = {
-    "status": "completed",
-    "plan-id": "mock-1",
-    "file-scan-tasks": FILE_SCAN_TASKS,  # reference; populated before server starts
-    "delete-files": [],
-    "plan-tasks": [],
-}
+def _file_scan_tasks_body(table: str) -> dict:
+    tasks = TABLE_SCAN_TASKS.get(table) or TABLE_SCAN_TASKS.get("marksheet", [])
+    return {
+        "status": "completed",
+        "plan-id": f"mock-{table}-1",
+        "file-scan-tasks": tasks,
+        "delete-files": [],
+        "plan-tasks": [],
+    }
 
-SUBMITTED_BODY = {
-    "status": "submitted",
-    "plan-id": "mock-async-1",
-}
+
+def _plan_tasks_body(table: str) -> dict:
+    tokens = list((PLAN_TASK_MAP.get(table) or {}).keys())
+    return {
+        "status": "completed",
+        "plan-id": f"mock-{table}-plan-1",
+        "file-scan-tasks": [],
+        "delete-files": [],
+        "plan-tasks": tokens,
+    }
+
+
+SUBMITTED_BODY = {"status": "submitted", "plan-id": "mock-async-1"}
 
 
 # ---------------------------------------------------------------------------
@@ -94,23 +167,41 @@ SUBMITTED_BODY = {
 
 
 class Handler(BaseHTTPRequestHandler):
-    async_first = False  # set by main()
-    _first_post_done = False  # tracks whether we've served the "submitted" response
+    async_first = False
+    _first_post_done = False
 
-    def log_message(self, fmt, *args):  # suppress default access log; we log ourselves
-        pass
+    def log_message(self, fmt, *args):
+        pass  # suppress default access log
 
-    def _read_body(self):
+    def _read_body(self) -> bytes:
         length = int(self.headers.get("Content-Length", 0))
         return self.rfile.read(length) if length else b""
 
-    def _send_json(self, code, body):
+    def _send_json(self, code: int, body: dict):
         data = json.dumps(body, indent=2).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def _extract_table_endpoint(self):
+        """Returns (table_name, endpoint) from the URL path.
+
+        Handles /v1/{prefix}/namespaces/{ns}/tables/{table}/{endpoint}[/...]
+        and     /v1/catalogs/{cat}/namespaces/{ns}/tables/{table}/{endpoint}[/...]
+        """
+        parts = self.path.split("/tables/", 1)
+        if len(parts) < 2:
+            return None, None
+        segs = parts[1].split("/")
+        table = segs[0]
+        endpoint = segs[1] if len(segs) > 1 else ""
+        return table, endpoint
+
+    # ------------------------------------------------------------------
+    # POST /plan  or  /tasks
+    # ------------------------------------------------------------------
 
     def do_POST(self):
         raw = self._read_body()
@@ -119,8 +210,16 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             payload = {}
 
+        table, endpoint = self._extract_table_endpoint()
+
+        if endpoint == "tasks":
+            self._handle_fetch_scan_tasks(table, payload)
+        else:
+            self._handle_plan(table, payload)
+
+    def _handle_plan(self, table: str, payload: dict):
         filter_val = payload.get("filter")
-        print(f"\nPOST {self.path}")
+        print(f"\nPOST plan  table={table!r}")
         if filter_val:
             print(f"  filter: {json.dumps(filter_val)}")
         else:
@@ -128,19 +227,52 @@ class Handler(BaseHTTPRequestHandler):
 
         if Handler.async_first and not Handler._first_post_done:
             Handler._first_post_done = True
-            print("  → submitted (async-first mode)")
+            print("  → submitted (async-first)")
             self._send_json(200, SUBMITTED_BODY)
+            return
+
+        if table == PLAN_TASKS_TABLE:
+            tokens = list((PLAN_TASK_MAP.get(table) or {}).keys())
+            print(f"  → plan-tasks ({len(tokens)} tokens)")
+            self._send_json(200, _plan_tasks_body(table))
         else:
-            print(f"  → completed ({len(FILE_SCAN_TASKS)} tasks)")
-            self._send_json(200, COMPLETED_BODY)
+            tasks = TABLE_SCAN_TASKS.get(table) or TABLE_SCAN_TASKS.get("marksheet", [])
+            print(f"  → file-scan-tasks ({len(tasks)} files)")
+            self._send_json(200, _file_scan_tasks_body(table))
+
+    def _handle_fetch_scan_tasks(self, table: str, payload: dict):
+        token = payload.get("plan-task", "")
+        print(f"\nPOST tasks  table={table!r}  token={token!r}")
+        token_map = PLAN_TASK_MAP.get(table) or {}
+        tasks = token_map.get(token, [])
+        body = {"file-scan-tasks": tasks, "plan-tasks": [], "delete-files": []}
+        print(f"  → {len(tasks)} file-scan-tasks")
+        self._send_json(200, body)
+
+    # ------------------------------------------------------------------
+    # GET /plan/{plan-id}  (poll)
+    # ------------------------------------------------------------------
 
     def do_GET(self):
-        print(f"\nGET {self.path}")
-        print(f"  → completed ({len(FILE_SCAN_TASKS)} tasks)")
-        self._send_json(200, COMPLETED_BODY)
+        table, _ = self._extract_table_endpoint()
+        print(f"\nGET poll  table={table!r}")
+
+        if table == PLAN_TASKS_TABLE:
+            tokens = list((PLAN_TASK_MAP.get(table) or {}).keys())
+            print(f"  → plan-tasks ({len(tokens)} tokens)")
+            self._send_json(200, _plan_tasks_body(table))
+        else:
+            tasks = TABLE_SCAN_TASKS.get(table) or TABLE_SCAN_TASKS.get("marksheet", [])
+            print(f"  → file-scan-tasks ({len(tasks)} files)")
+            self._send_json(200, _file_scan_tasks_body(table))
+
+    # ------------------------------------------------------------------
+    # DELETE /plan/{plan-id}  (cancel)
+    # ------------------------------------------------------------------
 
     def do_DELETE(self):
-        print(f"\nDELETE {self.path}")
+        table, _ = self._extract_table_endpoint()
+        print(f"\nDELETE  table={table!r}")
         self.send_response(204)
         self.end_headers()
 
@@ -151,22 +283,27 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    global PLAN_TASKS_TABLE
+
     parser = argparse.ArgumentParser(description="Mock IRC scan plan server")
     parser.add_argument("--port", type=int, default=8081)
+    parser.add_argument("--async-first", action="store_true")
     parser.add_argument(
-        "--async-first",
-        action="store_true",
-        help="Return 'submitted' on first POST; 'completed' on subsequent GET",
+        "--plan-tasks-table",
+        default="plan_tasks_table",
+        help="Table name that returns plan-tasks tokens (default: plan_tasks_table)",
     )
     args = parser.parse_args()
 
+    PLAN_TASKS_TABLE = args.plan_tasks_table
     ensure_testdata()
 
     Handler.async_first = args.async_first
 
     server = HTTPServer(("", args.port), Handler)
-    print(f"\nMock scan plan server listening on http://localhost:{args.port}")
-    print(f"async-first mode: {args.async_first}")
+    print(f"\nListening on http://localhost:{args.port}")
+    print(f"async-first: {args.async_first}")
+    print(f"plan-tasks table: {PLAN_TASKS_TABLE!r}")
     print()
     try:
         server.serve_forever()
