@@ -1,24 +1,27 @@
 # Unity Catalog Extension
-Warning: this extension is an experimental, proof-of-concept for an extension, feel free to try it out, but no guarantees are given whatsoever.
-This extension could be renamed, moved or removed at any point.
 
-This is a proof-of-concept extension demonstrating DuckDB connecting to the Unity Catalog to scan Delta Table using 
-the [delta extension](https://duckdb.org/docs/extensions/delta).
+DuckDB extension for reading and writing [Delta Lake](https://delta.io/) tables via the [Unity Catalog](https://www.unitycatalog.io/) API.
 
-You can try it out using DuckDB (>= v1.0.0) on the platforms: `linux_amd64`, `linux_amd64_gcc4`, `osx_amd64` and `osx_arm64` by running:
+For full documentation, see [duckdb.org/docs/extensions/unity_catalog](https://duckdb.org/docs/extensions/unity_catalog).
 
-```SQL
+## Quick Start
+
+```sql
 INSTALL unity_catalog;
 INSTALL delta;
 LOAD delta;
 LOAD unity_catalog;
+
 CREATE SECRET (
-	TYPE UNITY_CATALOG,
-	TOKEN '${UC_TOKEN}',
-	ENDPOINT '${UC_ENDPOINT}',
-	AWS_REGION '${UC_AWS_REGION}'
-)
-ATTACH 'test_catalog' AS test_catalog (TYPE UNITY_CATALOG)
-SHOW ALL TABLES;
-SELECT * FROM test_catalog.test_schema.test_table;
+    TYPE unity_catalog,
+    TOKEN '⟨token⟩',
+    ENDPOINT '⟨endpoint⟩',
+    AWS_REGION '⟨region⟩'
+);
+ATTACH 'my_catalog' AS my_catalog (TYPE unity_catalog);
+SELECT * FROM my_catalog.my_schema.my_table;
 ```
+
+## Build Configuration
+
+See `extension_config.cmake` to switch between a local delta checkout and the GitHub release.
