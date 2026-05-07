@@ -555,8 +555,8 @@ static UCScanPlanResult ParseScanPlanResponse(const string &json_str) {
 UCScanPlanResult UCAPI::FetchPlanningResult(ClientContext &ctx, const string &catalog_name, const string &schema_name,
                                             const string &table_name, const string &plan_id,
                                             const UCCredentials &credentials, const string &scan_plan_endpoint) {
-	string url = scan_plan_endpoint + "/v1/" + catalog_name + "/namespaces/" + schema_name + "/tables/" + table_name +
-	             "/plan/" + plan_id;
+	string url = scan_plan_endpoint + "/v1/catalogs/" + catalog_name + "/namespaces/" + schema_name + "/tables/" +
+	             table_name + "/plan/" + plan_id;
 	auto resp = MakeRequest(ctx, url, credentials.token);
 	return ParseScanPlanResponse(resp);
 }
@@ -564,8 +564,8 @@ UCScanPlanResult UCAPI::FetchPlanningResult(ClientContext &ctx, const string &ca
 UCScanPlanResult UCAPI::PlanTableScan(ClientContext &ctx, const string &catalog_name, const string &schema_name,
                                       const string &table_name, const UCCredentials &credentials,
                                       const string &scan_plan_endpoint, const string &filter_json) {
-	string url =
-	    scan_plan_endpoint + "/v1/" + catalog_name + "/namespaces/" + schema_name + "/tables/" + table_name + "/plan";
+	string url = scan_plan_endpoint + "/v1/catalogs/" + catalog_name + "/namespaces/" + schema_name + "/tables/" +
+	             table_name + "/plan";
 	string body = filter_json.empty() ? "{}" : "{\"filter\":" + filter_json + "}";
 	auto resp = MakeRequest(ctx, url, credentials.token, body);
 	auto result = ParseScanPlanResponse(resp);

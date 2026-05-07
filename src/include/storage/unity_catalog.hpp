@@ -22,7 +22,7 @@ class UCSchemaEntry;
 struct UCCredentials {
 	string endpoint;
 	string token;
-	string aws_region; // not really credentials; required to query S3 tables
+	string aws_region;         // not really credentials; required to query S3 tables
 	string scan_plan_endpoint; // explicitly set via attach option; empty = probe on first use
 };
 
@@ -38,7 +38,7 @@ public:
 	explicit UnityCatalog(AttachedDatabase &db_p, const string &internal_name, AttachOptions &attach_options,
 	                      UCCredentials credentials, const string &default_schema,
 	                      string catalog_name = "unity_catalog");
-	~UnityCatalog();
+	~UnityCatalog() override;
 
 	string internal_name;
 	AccessMode access_mode;
@@ -93,9 +93,11 @@ public:
 
 	// Returns the scan plan endpoint to use for this catalog, or "" to skip scan planning.
 	// On the first successful PlanTableScan the caller should do nothing; on any failure
-	// the caller should set scan_plan_unavailable = true so subsequent queries skip the
-	// scan plan path entirely.
+	// call MarkScanPlanUnavailable() so subsequent queries skip the scan plan path.
 	string GetScanPlanEndpoint();
+	void MarkScanPlanUnavailable() {
+		scan_plan_unavailable.store(true);
+	}
 
 private:
 	void DropSchema(ClientContext &context, DropInfo &info) override;

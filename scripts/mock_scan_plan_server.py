@@ -8,7 +8,7 @@ Logs the received filter JSON on every POST so the serialization can be eyeballe
 Startup: generates two small Parquet test files in testdata/ (requires duckdb Python package).
 
 Usage:
-    python tools/mock_scan_plan_server.py [--port 8080] [--async-first]
+    python tools/mock_scan_plan_server.py [--port 8081] [--async-first]
 
     --async-first   First POST returns "submitted"; the subsequent GET returns "completed".
                     Use this to exercise the polling loop.
@@ -40,12 +40,13 @@ def ensure_testdata():
 
     if not part1.exists() or not part2.exists():
         con = duckdb.connect()
+        # Schema matches OSS UC default table unity.default.marksheet (id INT, name STRING, marks INT)
         con.execute(
-            f"COPY (SELECT i AS id, 'row_' || i::VARCHAR AS label "
+            f"COPY (SELECT i::INTEGER AS id, 'name_' || i::VARCHAR AS name, (i * 3)::INTEGER AS marks "
             f"FROM range(1, 51) t(i)) TO '{part1}' (FORMAT parquet)"
         )
         con.execute(
-            f"COPY (SELECT i AS id, 'row_' || i::VARCHAR AS label "
+            f"COPY (SELECT i::INTEGER AS id, 'name_' || i::VARCHAR AS name, (i * 3)::INTEGER AS marks "
             f"FROM range(51, 101) t(i)) TO '{part2}' (FORMAT parquet)"
         )
         con.close()
@@ -91,9 +92,10 @@ SUBMITTED_BODY = {
 # Handler
 # ---------------------------------------------------------------------------
 
+
 class Handler(BaseHTTPRequestHandler):
-    async_first = False        # set by main()
-    _first_post_done = False   # tracks whether we've served the "submitted" response
+    async_first = False  # set by main()
+    _first_post_done = False  # tracks whether we've served the "submitted" response
 
     def log_message(self, fmt, *args):  # suppress default access log; we log ourselves
         pass
@@ -147,9 +149,10 @@ class Handler(BaseHTTPRequestHandler):
 # Entry point
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(description="Mock IRC scan plan server")
-    parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--port", type=int, default=8081)
     parser.add_argument(
         "--async-first",
         action="store_true",
