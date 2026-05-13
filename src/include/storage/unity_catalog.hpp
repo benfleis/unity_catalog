@@ -8,8 +8,6 @@
 
 #pragma once
 
-#include <atomic>
-
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/common/enums/access_mode.hpp"
@@ -91,12 +89,11 @@ public:
 
 	void ClearCache();
 
-	// Returns the scan plan endpoint to use for this catalog, or "" to skip scan planning.
-	// On the first successful PlanTableScan the caller should do nothing; on any failure
-	// call MarkScanPlanUnavailable() so subsequent queries skip the scan plan path.
-	string GetScanPlanEndpoint();
-	void MarkScanPlanUnavailable() {
-		scan_plan_unavailable.store(true);
+	// Returns the scan plan endpoint to use for this catalog, or "" if scan planning is not
+	// configured.  Scan planning is opt-in: only active when scan_plan_endpoint is explicitly
+	// set as an ATTACH option.
+	string GetScanPlanEndpoint() const {
+		return credentials.scan_plan_endpoint;
 	}
 
 private:
@@ -105,9 +102,6 @@ private:
 private:
 	UCSchemaSet schemas;
 	string default_schema;
-
-	// Set to true by GetScanFunction on any scan plan failure to skip the path permanently.
-	std::atomic<bool> scan_plan_unavailable {false};
 };
 
 } // namespace duckdb

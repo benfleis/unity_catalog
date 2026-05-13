@@ -5,6 +5,7 @@
 
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include "duckdb/common/http_util.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/extension_helper.hpp"
 
@@ -558,23 +559,41 @@ static UCScanPlanResult ParseScanPlanResponse(const string &json_str) {
 // Scan plan API methods
 // ---------------------------------------------------------------------------
 
+static const char *UCScanPlanStatusToString(UCScanPlanStatus s) {
+	switch (s) {
+	case UCScanPlanStatus::COMPLETED:  return "completed";
+	case UCScanPlanStatus::SUBMITTED:  return "submitted";
+	case UCScanPlanStatus::FAILED:     return "failed";
+	case UCScanPlanStatus::CANCELLED:  return "cancelled";
+	default:                           return "unknown";
+	}
+}
+
 UCScanPlanResult UCAPI::FetchPlanningResult(ClientContext &ctx, const string &catalog_name, const string &schema_name,
                                             const string &table_name, const string &plan_id,
                                             const UCCredentials &credentials, const string &scan_plan_endpoint) {
-	string url = scan_plan_endpoint + "/v1/catalogs/" + catalog_name + "/namespaces/" + schema_name + "/tables/" +
+	string url = scan_plan_endpoint + "/v1/" + catalog_name + "/namespaces/" + schema_name + "/tables/" +
 	             table_name + "/plan/" + plan_id;
+	DUCKDB_LOG_DEBUG(ctx, "scan-plan GET %s", url);
 	auto resp = MakeRequest(ctx, url, credentials.token);
-	return ParseScanPlanResponse(resp);
+	auto result = ParseScanPlanResponse(resp);
+	DUCKDB_LOG_DEBUG(ctx, "scan-plan GET %s -> status=%s inline=%zu plan_tasks=%zu", url,
+	                 UCScanPlanStatusToString(result.status), result.file_scan_tasks.size(), result.plan_tasks.size());
+	return result;
 }
 
 UCScanPlanResult UCAPI::PlanTableScan(ClientContext &ctx, const string &catalog_name, const string &schema_name,
                                       const string &table_name, const UCCredentials &credentials,
                                       const string &scan_plan_endpoint, const string &filter_json) {
-	string url = scan_plan_endpoint + "/v1/catalogs/" + catalog_name + "/namespaces/" + schema_name + "/tables/" +
+	string url = scan_plan_endpoint + "/v1/" + catalog_name + "/namespaces/" + schema_name + "/tables/" +
 	             table_name + "/plan";
 	string body = filter_json.empty() ? "{}" : "{\"filter\":" + filter_json + "}";
+	DUCKDB_LOG_DEBUG(ctx, "scan-plan POST %s filter=%s", url, filter_json.empty() ? "(none)" : filter_json);
 	auto resp = MakeRequest(ctx, url, credentials.token, body);
 	auto result = ParseScanPlanResponse(resp);
+	DUCKDB_LOG_DEBUG(ctx, "scan-plan POST %s -> status=%s plan_id=%s inline=%zu plan_tasks=%zu", url,
+	                 UCScanPlanStatusToString(result.status), result.plan_id,
+	                 result.file_scan_tasks.size(), result.plan_tasks.size());
 
 	constexpr int POLL_COUNT_MAX = 20;
 	constexpr int POLL_SLEEP_MS = 500;
@@ -590,7 +609,7 @@ UCScanPlanResult UCAPI::PlanTableScan(ClientContext &ctx, const string &catalog_
 UCScanPlanResult UCAPI::FetchScanTasks(ClientContext &ctx, const string &catalog_name, const string &schema_name,
                                        const string &table_name, const string &plan_task,
                                        const UCCredentials &credentials, const string &scan_plan_endpoint) {
-	string url = scan_plan_endpoint + "/v1/catalogs/" + catalog_name + "/namespaces/" + schema_name + "/tables/" +
+	string url = scan_plan_endpoint + "/v1/" + catalog_name + "/namespaces/" + schema_name + "/tables/" +
 	             table_name + "/tasks";
 	// Body is {"plan-task":"<token>"}; token is opaque so we escape it as a JSON string manually.
 	string escaped;
@@ -601,6 +620,7 @@ UCScanPlanResult UCAPI::FetchScanTasks(ClientContext &ctx, const string &catalog
 		escaped += c;
 	}
 	string body = "{\"plan-task\":\"" + escaped + "\"}";
+	DUCKDB_LOG_DEBUG(ctx, "scan-plan fetchScanTasks POST %s token=%s", url, plan_task);
 	auto resp = MakeRequest(ctx, url, credentials.token, body);
 
 	// FetchScanTasksResult is a bare ScanTasks object — no status field.
@@ -612,6 +632,8 @@ UCScanPlanResult UCAPI::FetchScanTasks(ClientContext &ctx, const string &catalog
 	UCScanPlanResult result;
 	result.status = UCScanPlanStatus::COMPLETED;
 	ParseScanTasksPayload(root, result);
+	DUCKDB_LOG_DEBUG(ctx, "scan-plan fetchScanTasks POST %s -> inline=%zu plan_tasks=%zu", url,
+	                 result.file_scan_tasks.size(), result.plan_tasks.size());
 	return result;
 }
 

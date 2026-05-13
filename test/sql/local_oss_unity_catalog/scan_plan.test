@@ -1,0 +1,253 @@
+# name: test/sql/local_oss_unity_catalog/scan_plan.test
+# description: IRC scan plan API end-to-end against mock server
+# group: [local_oss_unity_catalog]
+#
+# Prerequisites (start both before running):
+#   python uc/scripts/mock_scan_plan_server.py   # scan plan mock on :8081
+#   uc/scripts/start_unity_catalog.sh            # OSS UC server on :8080
+#
+# Set env vars:
+#   UC_TEST_SERVER_RUNNING=1
+#   UC_SCAN_PLAN_SERVER_RUNNING=1
+#
+# Table behaviours exercised:
+#   marksheet         greedy   — 1 inline file-scan-task, 0 plan-tasks
+#   marksheet_uniform greedy   — same
+#   numbers           lazy     — 0 inline, 1 plan-task token → fetchScanTasks → 2 files
+#   user_countries    hybrid   — 1 inline + 1 plan-task token → fetchScanTasks
+
+require parquet
+
+require unity_catalog
+
+require delta
+
+require httpfs
+
+require-env UC_TEST_SERVER_RUNNING
+
+require-env UC_SCAN_PLAN_SERVER_RUNNING
+
+# Enable debug logging so we can inspect the scan-plan API calls.
+# (This also emits a console warning about losing shell output — expected.)
+statement ok
+CALL enable_logging(level := 'DEBUG');
+
+statement ok
+CREATE SECRET (
+    TYPE UNITY_CATALOG,
+    TOKEN 'not-used',
+    ENDPOINT 'http://127.0.0.1:8080',
+    AWS_REGION 'us-east-2'
+);
+
+statement ok
+ATTACH 'unity' AS uc (TYPE UNITY_CATALOG, DEFAULT_SCHEMA 'default',
+    scan_plan_endpoint 'http://127.0.0.1:8081');
+
+# -----------------------------------------------------------------------------
+# marksheet — greedy (1 inline file-scan-task, 0 plan-tasks)
+#
+# All 100 rows are returned as a single inline FileScanTask; the server never
+# needs to be polled with fetchScanTasks.
+#
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT count(*) FROM uc.default.marksheet;
+----
+100
+
+# POST response showed 1 inline task, 0 plan-tasks (greedy path)
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE message LIKE 'scan-plan POST%->%inline=1%plan_tasks=0';
+----
+1
+
+# fetchScanTasks must NOT have been called
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE message LIKE 'scan-plan fetchScanTasks%';
+----
+0
+
+# Data spot-check: id 1-100, name 'name_<id>', marks = id * 3
+query III
+SELECT id, name, marks FROM uc.default.marksheet WHERE id <= 3 ORDER BY id;
+----
+1	name_1	3
+2	name_2	6
+3	name_3	9
+
+# -----------------------------------------------------------------------------
+# marksheet — filter pushdown
+#
+# A comparison predicate must be serialised to an IRC Expression and sent in
+# the POST body, not left as "(none)".
+#
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT count(*) FROM uc.default.marksheet WHERE marks > 297;
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE message LIKE 'scan-plan POST%filter=%'
+  AND message NOT LIKE '%filter=(none)%';
+----
+1
+
+# -----------------------------------------------------------------------------
+# marksheet_uniform — greedy (same data and mechanism as marksheet)
+#
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT count(*) FROM uc.default.marksheet_uniform;
+----
+100
+
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE message LIKE 'scan-plan POST%->%inline=1%plan_tasks=0';
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE message LIKE 'scan-plan fetchScanTasks%';
+----
+0
+
+# -----------------------------------------------------------------------------
+# numbers — lazy (0 inline, 1 plan-task token → fetchScanTasks → 2 files)
+#
+# The server returns no inline FileScanTasks; all rows come through the
+# plan-task / fetchScanTasks path.  part1 covers as_int 1-50, part2 51-100.
+#
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT count(*) FROM uc.default.numbers;
+----
+100
+
+# POST response: 0 inline tasks, 1 plan-task token (lazy path)
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE message LIKE 'scan-plan POST%->%inline=0%plan_tasks=1';
+----
+1
+
+# fetchScanTasks called exactly once (one token)
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE message LIKE 'scan-plan fetchScanTasks POST%token=%';
+----
+1
+
+# fetchScanTasks response returned 2 inline files (part1 + part2)
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE message LIKE 'scan-plan fetchScanTasks POST%->%inline=2%';
+----
+1
+
+# Data from both files: as_int spans 1-100
+query II
+SELECT min(as_int), max(as_int) FROM uc.default.numbers;
+----
+1	100
+
+# -----------------------------------------------------------------------------
+# numbers — filter pushdown
+#
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT count(*) FROM uc.default.numbers WHERE as_int > 50;
+----
+50
+
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE message LIKE 'scan-plan POST%filter=%'
+  AND message NOT LIKE '%filter=(none)%';
+----
+1
+
+# -----------------------------------------------------------------------------
+# user_countries — hybrid (1 inline + 1 plan-task token)
+#
+# part1 (i=1-50)  returned as an inline FileScanTask.
+# part2 (i=51-100) returned via a plan-task token → fetchScanTasks.
+# Each of the 5 countries appears exactly 20 times across both parts.
+#
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT count(*) FROM uc.default.user_countries;
+----
+100
+
+# POST response: 1 inline task, 1 plan-task token (hybrid path)
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE message LIKE 'scan-plan POST%->%inline=1%plan_tasks=1';
+----
+1
+
+# fetchScanTasks called once for the hybrid token
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE message LIKE 'scan-plan fetchScanTasks POST%token=%';
+----
+1
+
+# Both parts present: each country appears 20 times (10 from each file)
+query II
+SELECT country, count(*) FROM uc.default.user_countries
+GROUP BY country ORDER BY country;
+----
+AU	20
+CA	20
+DE	20
+UK	20
+US	20
+
+# -----------------------------------------------------------------------------
+# user_countries — filter pushdown
+#
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT count(*) FROM uc.default.user_countries WHERE age > 65;
+----
+8
+
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE message LIKE 'scan-plan POST%filter=%'
+  AND message NOT LIKE '%filter=(none)%';
+----
+1
+
+statement ok
+DETACH uc

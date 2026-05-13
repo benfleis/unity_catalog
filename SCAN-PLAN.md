@@ -394,8 +394,17 @@ Catalog `unity`, schema `default`. Used by the mock server and integration tests
 | `numbers` | `as_int INT, as_double DOUBLE` | External Delta |
 | `user_countries` | `first_name VARCHAR, age BIGINT, country VARCHAR` | External Delta; partitioned by `country` |
 
-Mock server generates 2 Parquet files per table (rows 1–50 and 51–100) in
-`uc/data/scan-plan-testdata/<table>/part{1,2}.parquet`.
+Mock server behaviour (routes by table name in the URL):
+
+| Table | Inline file-scan-tasks | Plan-task tokens |
+|---|---|---|
+| `marksheet` | 1 (all.parquet, 100 rows) | — |
+| `marksheet_uniform` | 1 (all.parquet, 100 rows) | — |
+| `numbers` | — | 1 token → part1 + part2 (50 rows each) |
+| `user_countries` | 1 (part1, 50 rows) | 1 token → part2 (50 rows) |
+| unknown | falls back to marksheet | — |
+
+Files in `uc/data/scan-plan-testdata/<table>/`.
 
 ---
 
