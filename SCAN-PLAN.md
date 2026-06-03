@@ -75,7 +75,8 @@ involvement for reading scan-planned tables.
 - Residual filter from `FileScanTask` not explicitly re-applied — parquet_scan handles
   row-level filtering; DuckDB does not re-apply the cleared filter
 - Partition values not injected as virtual columns
-- `plan_tasks` decoded but `fetchScanTasks` not called (only `file-scan-tasks` acted on)
+- `plan_tasks` tokens are fetched via `fetchScanTasks` (Delta IPC path) but only single-token
+  responses are handled; multi-token batching not yet implemented
 - Credentials still come from existing `RefreshCredentials()` (not `loadCredentials`)
 - `SerializeFiltersToIRC` handles common cases only; unsupported expression types fall back to
   a `true` literal (server returns more files; DuckDB parquet reader still filters correctly)
@@ -198,49 +199,25 @@ Reuse existing helpers: `MakeRequest`, `TryGetStrFromObject`, `TryGetNumFromObje
 
 ---
 
-### Step 3 — Scan plan endpoint: explicit option + lazy probe cache
+### Step 3 — Scan plan endpoint: explicit opt-in option
+
+Scan planning is **opt-in only** — it activates when `scan_plan_endpoint` is set as an ATTACH
+option. No auto-detection, no probe state machine.
 
 **`uc/src/include/storage/unity_catalog.hpp`** — add to `UCCredentials`:
 
 ```cpp
-string scan_plan_endpoint; // explicitly set via attach option; empty = probe on first use
+string scan_plan_endpoint; // set via ATTACH option; empty = scan plan disabled
 ```
 
-Add to `UnityCatalog`:
+`UnityCatalog::GetScanPlanEndpoint()` simply returns `credentials.scan_plan_endpoint`.
 
-```cpp
-enum class ScanPlanState { UNKNOWN, AVAILABLE, UNAVAILABLE };
-atomic<ScanPlanState> scan_plan_state {ScanPlanState::UNKNOWN};
-string resolved_scan_plan_endpoint; // set once on first successful probe
-mutex scan_plan_probe_mutex;
-```
+**`uc/src/unity_catalog_extension.cpp`** — read optional `scan_plan_endpoint` attach option
+and store in `UCCredentials`. Strip trailing slash.
 
-**Probe logic** — new method `UnityCatalog::GetScanPlanEndpoint()`:
-
-```cpp
-string UnityCatalog::GetScanPlanEndpoint() {
-    if (!credentials.scan_plan_endpoint.empty()) {
-        return credentials.scan_plan_endpoint;
-    }
-    auto state = scan_plan_state.load();
-    if (state == ScanPlanState::AVAILABLE)   return resolved_scan_plan_endpoint;
-    if (state == ScanPlanState::UNAVAILABLE) return "";
-
-    lock_guard<mutex> lk(scan_plan_probe_mutex);
-    if (scan_plan_state.load() != ScanPlanState::UNKNOWN) {
-        return scan_plan_state.load() == ScanPlanState::AVAILABLE
-                   ? resolved_scan_plan_endpoint : "";
-    }
-    // Probe credentials.endpoint: empty POST to /plan, accept any non-connection-error response
-    // On success: mark AVAILABLE, cache endpoint
-    // On connection error: mark UNAVAILABLE permanently
-}
-```
-
-`UNAVAILABLE` is permanent for the lifetime of the attached catalog.
-
-**`uc/src/unity_catalog_extension.cpp`** — in `UnityCatalogAttach`: read optional
-`scan_plan_endpoint` attach option and store in `UCCredentials`.
+> **Note:** A probe-and-cache mechanism (set UNAVAILABLE on HTTP 405, skip probe on subsequent
+> queries) is a TODO. See TASKS.md. For now, any API failure propagates as an error on that
+> query; the next query retries.
 
 ---
 
@@ -369,17 +346,20 @@ When multiple filters are present, wrap them in `{"type":"and","left":...,"right
 
 ---
 
-## Files to modify / create
+## Files modified / created
 
 | File | Change |
 |------|--------|
-| `uc/scripts/mock_scan_plan_server.py` | **create** — Flask mock server (logs filter field) |
-| `uc/src/include/uc_api.hpp` | add structs + method declarations |
-| `uc/src/uc_api.cpp` | implement `PlanTableScan` (with filter body), `FetchPlanningResult` |
-| `uc/src/include/storage/unity_catalog.hpp` | add `scan_plan_endpoint` to `UCCredentials`; add probe state + `GetScanPlanEndpoint()` decl |
-| `uc/src/storage/unity_catalog.cpp` | implement `GetScanPlanEndpoint()` |
-| `uc/src/unity_catalog_extension.cpp` | read `scan_plan_endpoint` attach option |
+| `uc/scripts/mock_scan_plan_server.py` | **created** — stdlib mock server (no Flask); logs filter; all four OSS UC tables |
+| `uc/src/include/uc_api.hpp` | added structs + method declarations |
+| `uc/src/uc_api.cpp` | `PlanTableScan`, `FetchPlanningResult`, `FetchScanTasks`; debug logging on all three calls |
+| `uc/src/include/storage/unity_catalog.hpp` | `scan_plan_endpoint` in `UCCredentials`; inline `GetScanPlanEndpoint()` |
+| `uc/src/unity_catalog_extension.cpp` | reads `scan_plan_endpoint` attach option |
 | `uc/src/storage/uc_table_entry.cpp` | `UCScanPlanBindData`, `MakeUCScanPlanTableFunction`, `UCScanPlanPushdownFilter`, `SerializeFiltersToIRC`, `BindParquetFiles` |
+| `delta/src/delta_multi_file_list.cpp` | `InitScanPlanMode`; lazy `GetFileInternal` IPC path; filter pushdown disabled in scan-plan mode |
+| `uc/src/functions/uc_scan_plan_fetch_tasks.cpp` | **created** — `UCDeltaScanPlanFetchTasks` IPC function; pops tokens, calls `FetchScanTasks`, returns paths |
+| `uc/test/sql/local_oss_unity_catalog/scan_plan.test` | **created** — sqllogictest for all four OSS UC tables + filter pushdown |
+| `uc/test/sql/databricks/scan_plan.test` | **created** — Databricks integration test (requires `DATABRICKS_SCAN_PLAN_ENDPOINT`) |
 
 ---
 
@@ -410,32 +390,39 @@ Files in `uc/data/scan-plan-testdata/<table>/`.
 
 ## Verification
 
-1. **Mock — happy path**
+1. **Mock — happy path** (sqllogictest covers this; manual verification below)
    ```bash
-   python tools/mock_scan_plan_server.py &
+   python uc/scripts/mock_scan_plan_server.py &   # port 8081
    # In DuckDB:
-   ATTACH 'test_catalog' (TYPE unity_catalog, secret 'my_secret',
-       scan_plan_endpoint 'http://localhost:8080');
-   SELECT * FROM test_catalog.default.my_table LIMIT 5;
-   # Reads from mock-provided parquet files; Delta kernel not invoked
+   ATTACH 'unity' AS uc (TYPE UNITY_CATALOG, DEFAULT_SCHEMA 'default',
+       scan_plan_endpoint 'http://127.0.0.1:8081');
+   SELECT count(*) FROM uc.default.marksheet;  -- 100, via parquet (no Delta kernel)
    ```
 
-2. **Filter pushdown**: confirm the serialized IRC Expression reaches the server.
+2. **Filter pushdown**: IRC Expression appears in DuckDB debug logs.
    ```sql
-   SELECT * FROM test_catalog.default.my_table WHERE id > 100;
-   -- mock server log should show the POST body containing:
-   -- {"filter": {"type": "gt", "term": "id", "value": 100}}
+   CALL enable_logging(level := 'DEBUG');
+   SELECT count(*) FROM uc.default.marksheet WHERE marks > 297;
+   SELECT message FROM duckdb_logs()
+   WHERE message LIKE 'scan-plan POST%filter=%' AND message NOT LIKE '%filter=(none)%';
    ```
 
-3. **Fallback check**: stop the mock server; same query should succeed via Delta path.
+3. **Fallback check**: stop mock server; same query should succeed via Delta path (TODO: not yet
+   automated — requires separate test setup).
 
-4. **Probe cache**: with no `scan_plan_endpoint` set, first query probes `credentials.endpoint`;
-   on failure marks UNAVAILABLE and subsequent queries skip the probe entirely.
+4. **Async path**: `python uc/scripts/mock_scan_plan_server.py --async-first` returns
+   `"submitted"` on first POST; verify polling loop fetches `"completed"` on GET (TODO: no
+   automated test yet).
 
-5. **Async path**: modify mock to return `{"status":"submitted","plan-id":"p1"}` on first POST
-   and `{"status":"completed",...}` on the poll GET — verify polling loop works.
-
-6. **Live endpoint**: swap `scan_plan_endpoint` for the production URL when ready.
+5. **Live endpoint**:
+   ```sql
+   ATTACH 'duckdb_write_testing' AS uc (TYPE UNITY_CATALOG,
+       ENDPOINT 'https://$DATABRICKS_HOST',
+       TOKEN '...',
+       DEFAULT_SCHEMA 'source',
+       scan_plan_endpoint 'https://$DATABRICKS_HOST/api/2.1/unity-catalog/iceberg-rest');
+   SELECT * FROM uc.source.irc_simple_table;
+   ```
 
 ---
 
@@ -453,28 +440,37 @@ Files in `uc/data/scan-plan-testdata/<table>/`.
   design cannot support this at all: by the time we could fetch the next batch, the scan is
   already executing.
 
-### Next step: lazy file enumeration via `plan-tasks`
+### Lazy file enumeration via `plan-tasks` — **implemented (POC)**
 
-**What it enables**: streaming file discovery during scan execution; no upfront memory spike;
-correct handling of tables with millions of files where the server intentionally withholds
-the full list.
+The POC uses **DataChunk IPC through Delta**: UC registers `__internal_uc_scan_plan_fetch_tasks`;
+Delta's lazy `GetFileInternal` discovers and calls it, fetching file paths per plan-task token.
+This reuses Delta's existing lazy file machinery without core DuckDB changes.
 
-**Option 1 — `UCLazyMultiFileList`**: implement a `MultiFileList` subclass in UC that calls
-`fetchScanTasks` on demand as DuckDB requests more files. Clean and self-contained within UC,
-but requires an injection point into `parquet_scan`'s bind — `parquet_scan` has no such slot
-today (Delta added `DeltaMultiFileReader::snapshot` specifically for its own use). Needs either
-a DuckDB core change or a new scan function that accepts an external `MultiFileList`.
+Current limitation: only single-token responses are handled. Multi-token batching (server
+returns multiple `plan-tasks` requiring sequential `fetchScanTasks` calls) is a TODO.
 
-**Option 2 — DataChunk IPC through Delta**: UC registers
-`__internal_uc_scan_plan_fetch_tasks`; Delta's lazy `GetFileInternal` discovers and calls it,
-fetching the next batch of file paths per call. Reuses the existing lazy machinery without
-core changes, but re-introduces the cross-extension boundary complexity and ties the scan plan
-path to Delta's file reader.
+A cleaner long-term path (**`UCMultiFileList`**) is to implement `MultiFileList` entirely
+within UC and call `MultiFileFunction<ParquetMultiFileInfo>::MultiFileBindInternal` directly
+(the internal bind path that accepts a `shared_ptr<MultiFileList>` — no core change needed).
+This unifies greedy and lazy into one path, eliminates the Delta IPC machinery, and allows
+per-file metadata from `UCScanPlanDataFile` (`file_size_in_bytes`, column bounds, etc.) to be
+injected via `OpenFileInfo::extended_info` — which httpfs already consumes to skip HEAD
+requests.
+
+**Cross-extension IPC design note**: when a `Value::POINTER` is already being passed across
+the extension boundary, the caller and callee are already coupled to the pointed-to type.
+In that case, prefer passing a pointer to a virtual interface and calling methods directly
+rather than marshalling inputs/outputs through DataChunk rows. DataChunk IPC is appropriate
+only when the callee must remain genuinely agnostic about the caller's types.
 
 ### Other post-POC items
 
-- Deletion vector / equality delete support (needs Delta reader, not raw parquet)
+- **DV / equality-delete support** — IRC-compatible tables appear mutually exclusive with
+  Deletion Vectors (see Open Questions in TASKS.md). If confirmed, DV tables must stay on the
+  Delta reader path and are excluded from scan planning entirely.
+- **Catalog-managed requirement** — scan plan API may require catalog-managed tables
+  (see Open Questions in TASKS.md). Affects which tables are eligible.
 - Expand `SerializeFiltersToIRC` to cover `NOT`, `IN`/`NOT IN`, transform terms
 - Partition column injection from `FileScanTask` partition values
-- Clean fallback from within `pushdown_complex_filter` (currently throws; should retry via Delta)
+- Probe-and-cache availability per attach (HTTP 405 → set UNAVAILABLE flag; see TASKS.md)
 - Replace `RefreshCredentials` with `loadCredentials?planId=...` for tighter credential scoping

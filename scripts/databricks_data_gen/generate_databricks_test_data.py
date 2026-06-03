@@ -35,7 +35,9 @@
 #   3. Databricks executes the substituted SQL directly
 #
 # Use --dry-run to print all SQL and actions without executing anything.
-# Use --catalog-managed to set delta.feature.catalogManaged and delta.enableRowTracking table properties.
+# Use --catalog-managed to set catalog-managed table properties.
+# Use --irc-api to set IRC-API table properties (IcebergCompatV2 + column mapping).
+# Both flags may be combined; their properties are merged.
 
 import os
 import sys
@@ -48,28 +50,50 @@ import pandas as pd
 
 S3_BUCKET = "duckdb-databricks-testing-ccv2"
 
-CATALOG_MANAGED_TBLPROPERTIES = (
-    'TBLPROPERTIES ('
-    '"delta.feature.catalogManaged" = "supported", '
-    '"delta.enableRowTracking" = "false"'
-    ')'
-)
+CATALOG_MANAGED = "catalog-managed"
+IRC_API = "irc-api"
+
+table_props = {
+    CATALOG_MANAGED: {
+        "delta.feature.catalogManaged": "supported",
+        "delta.enableRowTracking": "false",
+    },
+    IRC_API: {
+        "delta.columnMapping.mode": "id",
+        "delta.enableIcebergCompatV2": "true",
+        "delta.universalFormat.enabledFormats": "iceberg",
+    },
+}
 
 
 def get_spark_session():
-    token = os.environ.get('DATABRICKS_TOKEN')
-    endpoint = os.environ.get('DATABRICKS_ENDPOINT')
+    token = os.environ.get("DATABRICKS_TOKEN")
+    endpoint = os.environ.get("DATABRICKS_ENDPOINT")
 
     if not all([token, endpoint]):
-        raise ValueError("Missing required environment variables: DATABRICKS_TOKEN and DATABRICKS_ENDPOINT")
+        raise ValueError(
+            "Missing required environment variables: DATABRICKS_TOKEN and DATABRICKS_ENDPOINT"
+        )
 
-    return DatabricksSession.builder.remote(host=endpoint, token=token, serverless=True).getOrCreate()
+    return DatabricksSession.builder.remote(
+        host=endpoint, token=token, serverless=True
+    ).getOrCreate()
 
 
-def build_create_sql(full_table_name, location, select_expr, catalog_managed=False):
+def build_create_sql(full_table_name, location, select_expr, prop_sets=None):
+    prop_sets = prop_sets or []
     # Catalog-managed tables are UC-managed and must not have an explicit LOCATION
-    location_clause = "" if catalog_managed else f"\n            LOCATION '{location}'"
-    tblproperties = f"\n            {CATALOG_MANAGED_TBLPROPERTIES}" if catalog_managed else ""
+    location_clause = (
+        "" if CATALOG_MANAGED in prop_sets else f"\n            LOCATION '{location}'"
+    )
+    merged = {}
+    for key in prop_sets:
+        merged.update(table_props[key])
+    if merged:
+        items = ", ".join(f"'{k}' = '{v}'" for k, v in merged.items())
+        tblproperties = f"\n            TBLPROPERTIES ({items})"
+    else:
+        tblproperties = ""
     return (
         f"CREATE OR REPLACE TABLE {full_table_name}"
         f"{location_clause}"
@@ -79,11 +103,12 @@ def build_create_sql(full_table_name, location, select_expr, catalog_managed=Fal
     )
 
 
-def copy_tables(source, destination, dry_run=False, catalog_managed=False):
+def copy_tables(source, destination, dry_run=False, prop_sets=None):
+    prop_sets = prop_sets or []
     spark = get_spark_session()
 
-    source_catalog, source_schema = source.split('.')
-    dest_catalog, dest_schema = destination.split('.')
+    source_catalog, source_schema = source.split(".")
+    dest_catalog, dest_schema = destination.split(".")
 
     tables = spark.sql(f"SHOW TABLES IN {source_catalog}.{source_schema}").collect()
 
@@ -91,24 +116,31 @@ def copy_tables(source, destination, dry_run=False, catalog_managed=False):
 
     for table in tables:
         source_table_name = table.tableName
-        dest_table_name = f"{source_table_name}_catalog_managed" if catalog_managed else source_table_name
+        dest_table_name = (
+            f"{source_table_name}_catalog_managed"
+            if CATALOG_MANAGED in prop_sets
+            else source_table_name
+        )
         location = f"s3://{S3_BUCKET}/{dest_catalog}/{dest_schema}/{dest_table_name}"
         create_sql = build_create_sql(
             f"{dest_catalog}.{dest_schema}.{dest_table_name}",
             location,
             f"{source_catalog}.{source_schema}.{source_table_name}",
-            catalog_managed,
+            prop_sets,
         )
         if dry_run:
             print(create_sql)
         else:
-            print(f"Copying table {source_catalog}.{source_schema}.{source_table_name} to {dest_catalog}.{dest_schema}.{dest_table_name}")
+            print(
+                f"Copying table {source_catalog}.{source_schema}.{source_table_name} to {dest_catalog}.{dest_schema}.{dest_table_name}"
+            )
             spark.sql(create_sql)
 
 
-def duckdb_sql_to_tables(sql_file, destination, dry_run=False, catalog_managed=False):
+def duckdb_sql_to_tables(sql_file, destination, dry_run=False, prop_sets=None):
     """Run sql_file in DuckDB, push each table to Databricks via pandas, create Delta tables in Databricks."""
-    dest_catalog, dest_schema = destination.split('.')
+    prop_sets = prop_sets or []
+    dest_catalog, dest_schema = destination.split(".")
 
     with open(sql_file) as f:
         sql = f.read()
@@ -129,17 +161,25 @@ def duckdb_sql_to_tables(sql_file, destination, dry_run=False, catalog_managed=F
     with tempfile.TemporaryDirectory() as tmpdir:
         for table_name in tables:
             parquet_path = os.path.join(tmpdir, f"{table_name}.parquet")
-            con.execute(f"COPY (SELECT * FROM {table_name}) TO '{parquet_path}' (FORMAT parquet)")
+            con.execute(
+                f"COPY (SELECT * FROM {table_name}) TO '{parquet_path}' (FORMAT parquet)"
+            )
             print(f"  Exported '{table_name}' -> {parquet_path}")
 
             full_table_name = f"{dest_catalog}.{dest_schema}.{table_name}"
-            table_location = f"s3://{S3_BUCKET}/{dest_catalog}/{dest_schema}/{table_name}"
+            table_location = (
+                f"s3://{S3_BUCKET}/{dest_catalog}/{dest_schema}/{table_name}"
+            )
             temp_view = f"_tmp_{table_name}"
 
-            create_sql = build_create_sql(full_table_name, table_location, temp_view, catalog_managed)
+            create_sql = build_create_sql(
+                full_table_name, table_location, temp_view, prop_sets
+            )
 
             if dry_run:
-                print(f"  [dry-run] Would load {parquet_path} into Spark temp view '{temp_view}'")
+                print(
+                    f"  [dry-run] Would load {parquet_path} into Spark temp view '{temp_view}'"
+                )
                 print(f"  [dry-run] {create_sql}")
                 continue
 
@@ -157,7 +197,7 @@ def custom_sql_to_table(sql_file, destination, dry_run=False):
     The SQL file may contain multiple semicolon-separated statements (e.g. CREATE TABLE then ALTER TABLE then INSERT).
     Both {table_name} and {location} are replaced in every statement.
     """
-    dest_catalog, dest_schema = destination.split('.')
+    dest_catalog, dest_schema = destination.split(".")
     table_name = os.path.splitext(os.path.basename(sql_file))[0]
 
     with open(sql_file) as f:
@@ -166,18 +206,22 @@ def custom_sql_to_table(sql_file, destination, dry_run=False):
     full_table_name = f"{dest_catalog}.{dest_schema}.{table_name}"
     table_location = f"s3://{S3_BUCKET}/{dest_catalog}/{dest_schema}/{table_name}"
 
-    substituted = sql_template.replace("{table_name}", full_table_name).replace("{location}", table_location)
-    statements = [s.strip() for s in substituted.split(';') if s.strip()]
+    substituted = sql_template.replace("{table_name}", full_table_name).replace(
+        "{location}", table_location
+    )
+    statements = [s.strip() for s in substituted.split(";") if s.strip()]
 
     if dry_run:
         for stmt in statements:
-            print(stmt + ';')
+            print(stmt + ";")
             print()
         return
 
     spark = get_spark_session()
     spark.sql(f"CREATE SCHEMA IF NOT EXISTS {dest_catalog}.{dest_schema}")
-    print(f"  Creating Delta table '{full_table_name}' ({len(statements)} statement(s))")
+    print(
+        f"  Creating Delta table '{full_table_name}' ({len(statements)} statement(s))"
+    )
     for stmt in statements:
         spark.sql(stmt)
     print(f"  Done: {full_table_name} @ {table_location}")
@@ -185,35 +229,91 @@ def custom_sql_to_table(sql_file, destination, dry_run=False):
 
 def main():
     parser = argparse.ArgumentParser()
-    subparsers = parser.add_subparsers(dest='command', required=True)
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
-    copy_parser = subparsers.add_parser('copy', help='Copy tables between two catalog.schema locations')
-    copy_parser.add_argument('source', help='Source catalog.schema')
-    copy_parser.add_argument('destination', help='Destination catalog.schema')
-    copy_parser.add_argument('--dry-run', action='store_true', default=False, help='Print tables to be copied without copying them')
-    copy_parser.add_argument('--catalog-managed', action='store_true', default=False, help='Set catalog-managed table properties')
+    copy_parser = subparsers.add_parser(
+        "copy", help="Copy tables between two catalog.schema locations"
+    )
+    copy_parser.add_argument("source", help="Source catalog.schema")
+    copy_parser.add_argument("destination", help="Destination catalog.schema")
+    copy_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Print tables to be copied without copying them",
+    )
+    copy_parser.add_argument(
+        "--catalog-managed",
+        action="store_true",
+        default=False,
+        help="Set catalog-managed table properties",
+    )
+    copy_parser.add_argument(
+        "--irc-api",
+        action="store_true",
+        default=False,
+        help="Set IRC-API table properties (IcebergCompatV2 + column mapping)",
+    )
 
-    duckdb_sql_parser = subparsers.add_parser('from-duckdb-sql', help='Create Databricks tables from a SQL file run through DuckDB')
-    duckdb_sql_parser.add_argument('sql_file', help='Path to the SQL file to run in DuckDB')
-    duckdb_sql_parser.add_argument('destination', help='Destination catalog.schema')
-    duckdb_sql_parser.add_argument('--dry-run', action='store_true', default=False, help='Print actions without executing them')
-    duckdb_sql_parser.add_argument('--catalog-managed', action='store_true', default=False, help='Set catalog-managed table properties')
+    duckdb_sql_parser = subparsers.add_parser(
+        "from-duckdb-sql",
+        help="Create Databricks tables from a SQL file run through DuckDB",
+    )
+    duckdb_sql_parser.add_argument(
+        "sql_file", help="Path to the SQL file to run in DuckDB"
+    )
+    duckdb_sql_parser.add_argument("destination", help="Destination catalog.schema")
+    duckdb_sql_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Print actions without executing them",
+    )
+    duckdb_sql_parser.add_argument(
+        "--catalog-managed",
+        action="store_true",
+        default=False,
+        help="Set catalog-managed table properties",
+    )
+    duckdb_sql_parser.add_argument(
+        "--irc-api",
+        action="store_true",
+        default=False,
+        help="Set IRC-API table properties (IcebergCompatV2 + column mapping)",
+    )
 
-    custom_sql_parser = subparsers.add_parser('from-custom-sql', help='Create a Databricks table from a full CREATE TABLE SQL file with {table_name} and {location} placeholders')
-    custom_sql_parser.add_argument('sql_file', help='Path to the SQL file in scripts/custom_data_sources/; table name is derived from the filename')
-    custom_sql_parser.add_argument('destination', help='Destination catalog.schema')
-    custom_sql_parser.add_argument('--dry-run', action='store_true', default=False, help='Print the substituted SQL without executing it')
+    custom_sql_parser = subparsers.add_parser(
+        "from-custom-sql",
+        help="Create a Databricks table from a full CREATE TABLE SQL file with {table_name} and {location} placeholders",
+    )
+    custom_sql_parser.add_argument(
+        "sql_file",
+        help="Path to the SQL file in scripts/custom_data_sources/; table name is derived from the filename",
+    )
+    custom_sql_parser.add_argument("destination", help="Destination catalog.schema")
+    custom_sql_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Print the substituted SQL without executing it",
+    )
 
     args = parser.parse_args()
 
-    if args.command == 'copy':
-        copy_tables(args.source, args.destination, args.dry_run, args.catalog_managed)
-    elif args.command == 'from-duckdb-sql':
+    prop_sets = []
+    if getattr(args, "catalog_managed", False):
+        prop_sets.append(CATALOG_MANAGED)
+    if getattr(args, "irc_compatible", False):
+        prop_sets.append(IRC_API)
+
+    if args.command == "copy":
+        copy_tables(args.source, args.destination, args.dry_run, prop_sets)
+    elif args.command == "from-duckdb-sql":
         if not os.path.isfile(args.sql_file):
             print(f"Error: SQL file not found: {args.sql_file}", file=sys.stderr)
             sys.exit(1)
-        duckdb_sql_to_tables(args.sql_file, args.destination, args.dry_run, args.catalog_managed)
-    elif args.command == 'from-custom-sql':
+        duckdb_sql_to_tables(args.sql_file, args.destination, args.dry_run, prop_sets)
+    elif args.command == "from-custom-sql":
         if not os.path.isfile(args.sql_file):
             print(f"Error: SQL file not found: {args.sql_file}", file=sys.stderr)
             sys.exit(1)

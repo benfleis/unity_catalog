@@ -36,6 +36,9 @@ void UCDeltaScanPlanFetchTasksExecute(ClientContext &context, TableFunctionInput
 		for (auto &task : result.file_scan_tasks) {
 			paths.emplace_back(task.data_file.file_path);
 		}
+		for (auto &new_token : result.plan_tasks) {
+			fetch_ctx->remaining_tokens.push_back(std::move(new_token));
+		}
 	}
 	// Empty paths → no more files; Delta stops calling.
 

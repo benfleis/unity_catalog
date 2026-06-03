@@ -74,7 +74,9 @@ static string MakeRequest(ClientContext &ctx, const string &url, const string &t
 	}
 
 	if (!resp->Success()) {
-		throw IOException("Request to '%s' failed: '%s'", url, resp->GetError());
+		auto status_int = static_cast<int>(resp->status);
+		throw IOException("Request to '%s' failed (HTTP %d): %s\nResponse body: %s", url, status_int,
+		                  resp->GetError(), resp->body.empty() ? "(empty)" : resp->body);
 	}
 	return std::move(resp->body);
 }
@@ -572,7 +574,7 @@ static const char *UCScanPlanStatusToString(UCScanPlanStatus s) {
 UCScanPlanResult UCAPI::FetchPlanningResult(ClientContext &ctx, const string &catalog_name, const string &schema_name,
                                             const string &table_name, const string &plan_id,
                                             const UCCredentials &credentials, const string &scan_plan_endpoint) {
-	string url = scan_plan_endpoint + "/v1/" + catalog_name + "/namespaces/" + schema_name + "/tables/" +
+	string url = scan_plan_endpoint + "/v1/catalogs/" + catalog_name + "/namespaces/" + schema_name + "/tables/" +
 	             table_name + "/plan/" + plan_id;
 	DUCKDB_LOG_DEBUG(ctx, "scan-plan GET %s", url);
 	auto resp = MakeRequest(ctx, url, credentials.token);
@@ -585,7 +587,7 @@ UCScanPlanResult UCAPI::FetchPlanningResult(ClientContext &ctx, const string &ca
 UCScanPlanResult UCAPI::PlanTableScan(ClientContext &ctx, const string &catalog_name, const string &schema_name,
                                       const string &table_name, const UCCredentials &credentials,
                                       const string &scan_plan_endpoint, const string &filter_json) {
-	string url = scan_plan_endpoint + "/v1/" + catalog_name + "/namespaces/" + schema_name + "/tables/" +
+	string url = scan_plan_endpoint + "/v1/catalogs/" + catalog_name + "/namespaces/" + schema_name + "/tables/" +
 	             table_name + "/plan";
 	string body = filter_json.empty() ? "{}" : "{\"filter\":" + filter_json + "}";
 	DUCKDB_LOG_DEBUG(ctx, "scan-plan POST %s filter=%s", url, filter_json.empty() ? "(none)" : filter_json);
@@ -609,7 +611,7 @@ UCScanPlanResult UCAPI::PlanTableScan(ClientContext &ctx, const string &catalog_
 UCScanPlanResult UCAPI::FetchScanTasks(ClientContext &ctx, const string &catalog_name, const string &schema_name,
                                        const string &table_name, const string &plan_task,
                                        const UCCredentials &credentials, const string &scan_plan_endpoint) {
-	string url = scan_plan_endpoint + "/v1/" + catalog_name + "/namespaces/" + schema_name + "/tables/" +
+	string url = scan_plan_endpoint + "/v1/catalogs/" + catalog_name + "/namespaces/" + schema_name + "/tables/" +
 	             table_name + "/tasks";
 	// Body is {"plan-task":"<token>"}; token is opaque so we escape it as a JSON string manually.
 	string escaped;

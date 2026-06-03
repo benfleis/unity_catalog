@@ -1,0 +1,16 @@
+#pragma once
+
+#include "duckdb/common/vector.hpp"
+#include "duckdb/planner/expression.hpp"
+#include "duckdb/planner/operator/logical_get.hpp"
+
+namespace duckdb {
+
+// Serialize a vector of DuckDB filter expressions to a single IRC Expression
+// JSON string.  Multiple filters are ANDed together.  Returns "" when filters
+// is empty (caller should omit the filter field from the request body).
+// Unsupported expression types emit {"type":"true"} so the server returns the
+// full file list; the local reader still applies the full predicate.
+string SerializeFiltersToIRC(const vector<unique_ptr<Expression>> &filters, const LogicalGet &get);
+
+} // namespace duckdb
