@@ -142,18 +142,14 @@ bool TableInformation::IsCCV2() const {
 	return it != table_data->properties.end() && it->second == "supported";
 }
 
-Value TableInformation::BuildLogTail(ClientContext &context) {
-	auto &uc_catalog = catalog.Cast<UnityCatalog>();
-	auto commits =
-	    UCAPI::GetCommits(context, table_data->table_id, table_data->storage_location, uc_catalog.credentials);
-
+static Value BuildLogTailFromCommits(const UCAPICommitsResult &commits, const string &storage_location) {
 	vector<Value> commit_values;
 	for (const auto &commit : commits.commits) {
 		child_list_t<Value> commit_struct;
 		commit_struct.push_back(make_pair("version", Value::BIGINT(commit.version)));
 		commit_struct.push_back(make_pair("timestamp", Value::BIGINT(commit.timestamp)));
-		commit_struct.push_back(make_pair(
-		    "file_name", Value(table_data->storage_location + "/_delta_log/_staged_commits/" + commit.file_name)));
+		commit_struct.push_back(
+		    make_pair("file_name", Value(storage_location + "/_delta_log/_staged_commits/" + commit.file_name)));
 		commit_struct.push_back(make_pair("file_size", Value::BIGINT(commit.file_size)));
 		commit_struct.push_back(
 		    make_pair("file_modification_timestamp", Value::BIGINT(commit.file_modification_timestamp)));
@@ -189,12 +185,15 @@ void TableInformation::InternalAttach(ClientContext &context) {
 	info.path = table_data->storage_location;
 
 	if (IsCCV2()) {
-		auto log_tail = BuildLogTail(context);
+		auto &uc_catalog = catalog.Cast<UnityCatalog>();
+		auto commits =
+		    UCAPI::GetCommits(context, table_data->table_id, table_data->storage_location, uc_catalog.credentials);
 		info.options["parent_catalog"] = Value(catalog.GetName());
 		info.options["parent_catalog_schema"] = Value(schema.name);
 		info.options["parent_commit"] = Value(true);
-		if (!log_tail.IsNull()) {
-			info.options["log_tail"] = log_tail;
+		info.options["max_catalog_version"] = Value::BIGINT(commits.latest_table_version);
+		if (!commits.commits.empty()) {
+			info.options["log_tail"] = BuildLogTailFromCommits(commits, table_data->storage_location);
 		}
 	}
 
