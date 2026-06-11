@@ -28,7 +28,7 @@ public:
 	void InternalAttach(ClientContext &context);
 	void InternalDetach(ClientContext &context, const lock_guard<mutex> &_attach_lock);
 	void InternalCheckpoint(ClientContext &context, bool force);
-	bool IsCCV2() const;
+	bool IsCatalogManaged() const;
 	void MarkDirty();
 
 private:

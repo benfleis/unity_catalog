@@ -1,0 +1,111 @@
+# name: test/sql/databricks/scan_plan.test
+# description: scan plan API (IRC) against Databricks Unity Catalog
+# group: [databricks]
+#
+# Prerequisites — generate test data (once):
+#   python scripts/databricks_data_gen/generate_databricks_test_data.py from-custom-sql \
+#     scripts/databricks_data_gen/custom_data_sources/scan_plan_days_managed.sql \
+#     duckdb_testing.main
+#
+# Table: id INT, day VARCHAR, 5 files one-per-day, 10 rows/file, ids 1-50
+#   scan_plan_days_managed — catalog-managed (staged commits; only readable via scan plan path)
+
+require parquet
+
+require unity_catalog
+
+require delta
+
+require httpfs
+
+require-env DATABRICKS_TOKEN
+
+require-env DATABRICKS_ENDPOINT
+
+require-env DATABRICKS_REGION
+
+require-env DATABRICKS_SCAN_PLAN_ENDPOINT
+
+statement ok
+CALL enable_logging(level='DEBUG');
+
+statement ok
+CREATE SECRET (
+    TYPE UNITY_CATALOG,
+    TOKEN '${DATABRICKS_TOKEN}',
+    ENDPOINT '${DATABRICKS_ENDPOINT}',
+    AWS_REGION '${DATABRICKS_REGION}'
+);
+
+# -----------------------------------------------------------------------------
+# scan_plan_days_managed — full scan (all 50 rows, 5 files)
+#
+
+statement ok
+ATTACH 'duckdb_testing' AS uc (TYPE UNITY_CATALOG, READ_ONLY, DEFAULT_SCHEMA 'main',
+    scan_plan_endpoint '${DATABRICKS_SCAN_PLAN_ENDPOINT}');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT count(*) FROM uc.main.scan_plan_days_managed;
+----
+50
+
+# -----------------------------------------------------------------------------
+# Filter pushdown — single day (EQ expression, fully serialized)
+#
+# day = 'Mon' → ids 1-10 (10 rows); server must prune to the Mon file only.
+#
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT count(*) FROM uc.main.scan_plan_days_managed WHERE day = 'Mon';
+----
+10
+
+query II
+SELECT min(id), max(id) FROM uc.main.scan_plan_days_managed WHERE day = 'Mon';
+----
+1	10
+
+# -----------------------------------------------------------------------------
+# Filter pushdown — compound predicate with residual
+#
+# day = 'Mon' AND id % 2 = 0:
+#   - day = 'Mon'   → serialized as IRC EQ; server prunes to 1 file
+#   - id % 2 = 0    → unsupported; dropped from IRC filter; DuckDB applies it as a residual
+# Expected: ids 2,4,6,8,10 → count = 5
+# If the residual is incorrectly discarded (filters.clear()), count would be 10.
+#
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT count(*) FROM uc.main.scan_plan_days_managed WHERE day = 'Mon' AND id % 2 = 0;
+----
+5
+
+# Server still pruned to 1 file (AND with true-fallback doesn't widen the server predicate)
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE message LIKE 'scan-plan.PlanTableScan% inline=1% plan_tasks=0%';
+----
+1
+
+query I
+SELECT count(*) FROM uc.main.scan_plan_days_managed WHERE day = 'Fri' AND id % 2 = 0;
+----
+5
+
+query II
+SELECT min(id), max(id) FROM uc.main.scan_plan_days_managed WHERE day = 'Fri' AND id % 2 = 0;
+----
+42	50
+
+statement ok
+DETACH uc

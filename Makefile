@@ -29,7 +29,13 @@ venv:
 
 # This is to (re)gen the test data in the remote databricks, this does not need to be rerun unless remote data needs refreshing
 # Requires the same env variables from the write tests
+#
 # NOTE: requires databricks env IN PLACE, and $(BUILD_DIR)/duckdb with UC+Delta extensions loaded
+#
+# NOTE: Some custom SQL files use LOCATION pointing to s3://duckdb-databricks-testing-ccv2,
+# which is governed by the 'duckdblabs-testing' Databricks external location (NOT the
+# duckdb_testing UC catalog). CREATE EXTERNAL TABLE on that location requires separate
+# permission. Files without LOCATION (catalog-managed) succeed regardless.
 test_data_prepare: venv
 	for f in scripts/databricks_data_gen/custom_data_sources/*.sql; do \
 		${PYTHON_BIN} scripts/databricks_data_gen/generate_databricks_test_data.py from-custom-sql $$f duckdb_testing.main; \

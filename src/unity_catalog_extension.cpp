@@ -11,6 +11,7 @@
 #include "storage/uc_transaction_manager.hpp"
 #include "functions/uc_checkpoint.hpp"
 #include "uc_api.hpp"
+#include "uc_logging.hpp"
 #include "unity_catalog_extension.hpp"
 
 namespace duckdb {
@@ -87,6 +88,10 @@ static unique_ptr<Catalog> UnityCatalogAttach(optional_ptr<StorageExtensionInfo>
 			secret_name = entry.second.ToString();
 		} else if (lower_name == "default_schema") {
 			default_schema = entry.second.ToString();
+		} else if (lower_name == "scan_plan_endpoint") {
+			// NOTE: POC
+			credentials.scan_plan_endpoint = entry.second.ToString();
+			StringUtil::RTrim(credentials.scan_plan_endpoint, "/");
 		} else {
 			throw BinderException("Unrecognized option for UC attach: %s", entry.first);
 		}
@@ -136,7 +141,7 @@ static unique_ptr<Catalog> UnityCatalogAttach(optional_ptr<StorageExtensionInfo>
 		try {
 			default_schema = UCAPI::GetDefaultSchema(context, credentials);
 		} catch (Exception &e) {
-			DUCKDB_LOG_ERROR(context, "Failed to fetch default schema: %s", e.what());
+			UC_LOG_ERROR(context, "Failed to fetch default schema: %s", e.what());
 		}
 	}
 

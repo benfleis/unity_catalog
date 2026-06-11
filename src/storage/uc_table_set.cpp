@@ -130,14 +130,20 @@ void TableInformation::MarkDirty() {
 	is_dirty = true;
 }
 
-bool TableInformation::IsCCV2() const {
-	// Check for the preview setting
+bool TableInformation::IsCatalogManaged() const {
+	// OSS UC signals managed tables via table_type
+	// TODO: Databricks probably does too, confirm pls
+	if (table_data->table_type == "MANAGED") {
+		return true;
+	}
+
+	// Databricks: preview property
 	auto it = table_data->properties.find("delta.feature.catalogOwned-preview");
 	if (it != table_data->properties.end() && it->second == "supported") {
 		return true;
 	}
 
-	// Check for the GA setting
+	// Databricks: GA property
 	it = table_data->properties.find("delta.feature.catalogManaged");
 	return it != table_data->properties.end() && it->second == "supported";
 }
@@ -184,7 +190,7 @@ void TableInformation::InternalAttach(ClientContext &context) {
 	                {"unity_table_id", Value(table_data->table_id)}};
 	info.path = table_data->storage_location;
 
-	if (IsCCV2()) {
+	if (IsCatalogManaged()) {
 		auto &uc_catalog = catalog.Cast<UnityCatalog>();
 		auto commits =
 		    UCAPI::GetCommits(context, table_data->table_id, table_data->storage_location, uc_catalog.credentials);
