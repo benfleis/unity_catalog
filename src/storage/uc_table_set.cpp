@@ -130,6 +130,11 @@ void TableInformation::MarkDirty() {
 	is_dirty = true;
 }
 
+void TableInformation::SetEtag(const string &new_etag) {
+	lock_guard<mutex> l(attach_lock);
+	etag = new_etag;
+}
+
 bool TableInformation::IsCatalogManaged() const {
 	// OSS UC signals managed tables via table_type
 	// TODO: Databricks probably does too, confirm pls
@@ -192,8 +197,9 @@ void TableInformation::InternalAttach(ClientContext &context) {
 
 	if (IsCatalogManaged()) {
 		auto &uc_catalog = catalog.Cast<UnityCatalog>();
-		auto commits =
-		    UCAPI::GetCommits(context, table_data->table_id, table_data->storage_location, uc_catalog.credentials);
+		auto commits = UCAPI::LoadTable(context, table_data->catalog_name, table_data->schema_name,
+		                                table_data->name, uc_catalog.credentials);
+		etag = commits.etag;
 		info.options["parent_catalog"] = Value(catalog.GetName());
 		info.options["parent_catalog_schema"] = Value(schema.name);
 		info.options["parent_commit"] = Value(true);

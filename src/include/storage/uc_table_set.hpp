@@ -30,6 +30,7 @@ public:
 	void InternalCheckpoint(ClientContext &context, bool force);
 	bool IsCatalogManaged() const;
 	void MarkDirty();
+	void SetEtag(const string &new_etag);
 
 private:
 	string AttachedCatalogName() const;
@@ -41,6 +42,7 @@ public:
 	unique_ptr<UCAPITable> table_data;
 	shared_ptr<AttachedDatabase> internal_attached_database;
 	optional_ptr<Transaction> active_transaction;
+	string etag; // from LoadTable response; sent as assert-etag in UpdateTable (add-commit) calls
 
 	//! Guards schema_versions and dummy
 	mutex entry_lock;

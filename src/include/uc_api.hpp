@@ -60,7 +60,8 @@ struct UCAPICommit {
 
 struct UCAPICommitsResult {
 	vector<UCAPICommit> commits;
-	int64_t latest_table_version;
+	int64_t latest_table_version = 0;
+	string etag;
 };
 
 // IRC spec: DataFile (a ContentFile with content == "data").
@@ -143,11 +144,17 @@ public:
 	static vector<UCAPITable> GetTables(ClientContext &ctx, Catalog &catalog, const string &schema,
 	                                    const UCCredentials &credentials);
 	static vector<UCAPISchema> GetSchemas(ClientContext &ctx, Catalog &catalog, const UCCredentials &credentials);
-	static UCAPICommitsResult GetCommits(ClientContext &ctx, const string &table_id, const string &table_uri,
-	                                     const UCCredentials &credentials);
-	static bool PostCommit(ClientContext &ctx, const string &table_id, const string &table_uri,
-	                       const UCCredentials &credentials, idx_t version, idx_t timestamp, const string &file_name,
-	                       idx_t file_size, idx_t file_modification_timestamp);
+	// delta.yaml v1: GET /delta/v1/catalogs/{catalog}/schemas/{schema}/tables/{table}
+	// Returns commits (unbackfilled CCv2) + latest-table-version + etag.
+	static UCAPICommitsResult LoadTable(ClientContext &ctx, const string &catalog_name, const string &schema_name,
+	                                    const string &table_name, const UCCredentials &credentials);
+	// delta.yaml v1: POST /delta/v1/catalogs/{catalog}/schemas/{schema}/tables/{table}
+	// Sends add-commit update with optional assert-etag requirement.
+	// Returns the new etag from the response (empty if absent).
+	static string UpdateTable(ClientContext &ctx, const string &catalog_name, const string &schema_name,
+	                          const string &table_name, const string &etag, const UCCredentials &credentials,
+	                          idx_t version, idx_t timestamp, const string &file_name, idx_t file_size,
+	                          idx_t file_modification_timestamp);
 
 	// IRC spec: planTableScan — POST .../plan. Polls fetchPlanningResult automatically if
 	// the server returns status "submitted". filter_json is an IRC Expression JSON string;
