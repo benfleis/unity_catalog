@@ -137,17 +137,16 @@ static void UCScanPlanPushdownFilter(ClientContext &context, LogicalGet &get, Fu
 			// bidirectional IRC ↔ DuckDB expression translation.
 			return;
 		}
-	} catch (...) {
+	} catch (std::exception &e) {
+		// TODO: distinguish "feature not available for this caller" from transient errors.
+		// HTTP 405 confirmed as "not enabled" status from live endpoint.
+		// On a feature-unavailable response, set a per-UnityCatalog atomic flag
+		// (AVAILABLE/UNAVAILABLE, checked in GetScanPlanEndpoint) so all subsequent queries on
+		// this attach silently fall back to the Delta path without retrying.  Transient errors
+		// (5xx, network) must NOT set UNAVAILABLE — propagate per-query and allow retry.
+		// Granularity: per-ATTACH (per UnityCatalog instance) — availability is per-caller.
+		throw IOException("UC scan plan API call failed for table '%s': %s", bd.table_name, e.what());
 	}
-
-	// TODO: distinguish "feature not available for this caller" from transient errors.
-	// HTTP 405 confirmed as "not enabled" status from live endpoint.
-	// On a feature-unavailable response, set a per-UnityCatalog atomic flag
-	// (AVAILABLE/UNAVAILABLE, checked in GetScanPlanEndpoint) so all subsequent queries on
-	// this attach silently fall back to the Delta path without retrying.  Transient errors
-	// (5xx, network) must NOT set UNAVAILABLE — propagate per-query and allow retry.
-	// Granularity: per-ATTACH (per UnityCatalog instance) — availability is per-caller.
-	throw IOException("UC scan plan API call failed for table '%s'", bd.table_name);
 }
 
 // Advertise virtual columns so DuckDB uses COLUMN_IDENTIFIER_EMPTY (not ROW_ID) for

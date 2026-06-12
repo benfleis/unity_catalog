@@ -63,7 +63,7 @@ bool UCMultiFileList::ExpandNextPath() const {
 		remaining_tokens.push_back(std::move(new_token));
 	}
 
-	return !remaining_tokens.empty() || !result.file_scan_tasks.empty();
+	return !remaining_tokens.empty();
 }
 
 // Thread-local staging area for UCScanPlanPushdownFilter → UCMultiFileReaderFactory handoff.

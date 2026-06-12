@@ -166,7 +166,7 @@ string SerializeFiltersToIRC(const vector<unique_ptr<Expression>> &filters) {
 	if (filters.empty()) {
 		return "";
 	}
-	vector<string> parts(filters.size());
+	vector<string> parts;
 	for (auto &f : filters) {
 		string s = ExprToIRCJson(*f);
 		if (!s.empty()) {
