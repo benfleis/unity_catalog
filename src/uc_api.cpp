@@ -158,28 +158,6 @@ static UCAPIError CheckError(duckdb_yyjson::yyjson_val *api_result) {
 	return UCAPIError();
 }
 
-static string GetCredentialsRequest(ClientContext &ctx, const string &url, const string &table_id, bool write = false,
-                                    const string &token = "") {
-	auto db = ctx.db;
-	auto &http_util = HTTPUtil::Get(*db);
-	auto params = http_util.InitializeParameters(*db, url);
-
-	string access_type = write ? "READ_WRITE" : "READ";
-	string body = StringUtil::Format(R"({"table_id" : "%s", "operation" : "%s"})", table_id, access_type);
-	HTTPHeaders hdrs(*db);
-	hdrs.Insert("Content-Type", "application/json");
-	AuthenticateViaBearerToken(hdrs, token);
-
-	params->logger = ctx.logger;
-	PostRequestInfo req(url, hdrs, *params, reinterpret_cast<const_data_ptr_t>(body.c_str()), body.length());
-	auto resp = http_util.Request(req);
-
-	if (!resp->Success()) {
-		throw IOException("POST Request to '%s' failed: '%s'", url, resp->GetError());
-	}
-	// Ugh. actual response body not in resp->body, but in req.buffer_out
-	return std::move(req.buffer_out);
-}
 
 // # list catalogs
 //     echo "List of catalogs"
@@ -304,27 +282,37 @@ string UCAPI::UpdateTable(ClientContext &ctx, const string &catalog_name, const 
 	return new_etag;
 }
 
-UCAPITableCredentials UCAPI::GetTableCredentials(ClientContext &ctx, const string &table_id, bool write,
+UCAPITableCredentials UCAPI::GetTableCredentials(ClientContext &ctx, const string &catalog_name,
+                                                 const string &schema_name, const string &table_name, bool write,
                                                  const UCCredentials &credentials) {
 	UCAPITableCredentials result;
-
-	auto url = credentials.endpoint + "/api/2.1/unity-catalog/temporary-table-credentials";
-	UC_LOG_DEBUG(ctx, "uc-api.GetTableCredentials table_id=%s", table_id);
-	auto api_result = GetCredentialsRequest(ctx, url, table_id, write, credentials.token);
+	const char *operation = write ? "READ_WRITE" : "READ";
+	// XXX: hard-coded delta v1 protocol; protocol negotiation via GET /delta/v1/config not yet implemented
+	string url =
+	    StringUtil::Format("%s/api/2.1/unity-catalog/delta/v1/catalogs/%s/schemas/%s/tables/%s/credentials?operation=%s",
+	                       credentials.endpoint, catalog_name, schema_name, table_name, operation);
+	UC_LOG_DEBUG(ctx, "uc-api.GetTableCredentials %s.%s.%s op=%s", catalog_name, schema_name, table_name, operation);
+	auto api_result = MakeRequest(ctx, url, credentials.token);
 
 	YYJsonDoc doc(api_result);
 	auto *root = doc.Root();
 
 	auto error = CheckError(root);
 	if (error.HasError()) {
-		error.ThrowError(StringUtil::Format("Failed to get table credentials for table_id: %s", table_id));
+		error.ThrowError(
+		    StringUtil::Format("Failed to get table credentials for %s.%s.%s", catalog_name, schema_name, table_name));
 	}
 
-	auto *aws_temp_credentials = yyjson_obj_get(root, "aws_temp_credentials");
-	if (aws_temp_credentials) {
-		result.key_id = TryGetStrFromObject(aws_temp_credentials, "access_key_id");
-		result.secret = TryGetStrFromObject(aws_temp_credentials, "secret_access_key");
-		result.session_token = TryGetStrFromObject(aws_temp_credentials, "session_token");
+	// Parse storage-credentials array; use first entry (longest-prefix matching is a TODO)
+	auto *creds_arr = yyjson_obj_get(root, "storage-credentials");
+	if (creds_arr && yyjson_is_arr(creds_arr) && yyjson_arr_size(creds_arr) > 0) {
+		auto *cred = yyjson_arr_get_first(creds_arr);
+		auto *cfg = yyjson_obj_get(cred, "config");
+		if (cfg && yyjson_is_obj(cfg)) {
+			result.key_id = TryGetStrFromObject(cfg, "s3.access-key-id", false);
+			result.secret = TryGetStrFromObject(cfg, "s3.secret-access-key", false);
+			result.session_token = TryGetStrFromObject(cfg, "s3.session-token", false);
+		}
 	}
 
 	return result;

@@ -137,7 +137,9 @@ struct UCScanPlanResult {
 
 class UCAPI {
 public:
-	static UCAPITableCredentials GetTableCredentials(ClientContext &ctx, const string &table_id, bool write,
+	// delta.yaml v1: GET /delta/v1/catalogs/{catalog}/schemas/{schema}/tables/{table}/credentials
+	static UCAPITableCredentials GetTableCredentials(ClientContext &ctx, const string &catalog_name,
+	                                                 const string &schema_name, const string &table_name, bool write,
 	                                                 const UCCredentials &credentials);
 	static string GetDefaultSchema(ClientContext &ctx, const UCCredentials &credentials);
 	static vector<string> GetCatalogs(ClientContext &ctx, Catalog &catalog, const UCCredentials &credentials);

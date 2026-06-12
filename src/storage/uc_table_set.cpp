@@ -87,8 +87,9 @@ void TableInformation::RefreshCredentials(ClientContext &context) {
 	}
 	auto &secret_manager = SecretManager::Get(context);
 	// Get Credentials from UCAPI
-	auto table_credentials = UCAPI::GetTableCredentials(
-	    context, table_data->table_id, !(catalog.access_mode == AccessMode::READ_ONLY), catalog.credentials);
+	auto table_credentials =
+	    UCAPI::GetTableCredentials(context, table_data->catalog_name, table_data->schema_name, table_data->name,
+	                               !(catalog.access_mode == AccessMode::READ_ONLY), catalog.credentials);
 
 	// Inject secret into secret manager scoped to this path
 	CreateSecretInput input;
