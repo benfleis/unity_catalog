@@ -107,8 +107,9 @@ PhysicalOperator &UnityCatalog::PlanInsert(ClientContext &context, PhysicalPlanG
 	auto &table_entry = op.table.Cast<UCTableEntry>();
 	auto &table = table_entry.table;
 
-	table.InternalAttach(context);
+	// Credentials before Attach, since attach may backfill and need them.
 	table.RefreshCredentials(context);
+	table.InternalAttach(context);
 
 	auto internal_catalog = table.GetInternalCatalog();
 	return internal_catalog->PlanInsert(context, planner, op, plan);

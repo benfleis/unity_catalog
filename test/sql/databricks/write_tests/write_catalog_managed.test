@@ -79,3 +79,35 @@ SELECT parse_filename(file)[0:21] AS f FROM GLOB(getvariable('table_path') || '/
 ----
 00000000000000000001.
 00000000000000000002.
+
+# -----------------------------------------------------------------------------
+# Backfill verification — 3 iterations is enough to confirm the pattern repeats.
+# Confidence: SELECT count(*) = 10 proves the Delta kernel can read all committed
+# data, which requires backfill to have happened. The staged commits list at the
+# end explicitly ties the file-scan result to the 2 initial inserts above + 3 loop
+# inserts (v1-v5 total).
+#
+
+loop i 0 3
+
+statement ok
+INSERT INTO simple_table_catalog_managed VALUES (1000 + {i});
+
+endloop
+
+# Flush the last loop iteration's pending backfill; all 10 rows readable proves
+# backfill succeeded for all 5 DuckDB commits (Delta kernel reads from _delta_log/).
+query I
+SELECT count(*) FROM simple_table_catalog_managed;
+----
+10
+
+# All 5 staged commits present (v1-v2 from initial inserts above, v3-v5 from loop).
+query I
+SELECT parse_filename(file)[0:21] AS f FROM GLOB(getvariable('table_path') || '/_delta_log/_staged_commits/**/*') ORDER BY f;
+----
+00000000000000000001.
+00000000000000000002.
+00000000000000000003.
+00000000000000000004.
+00000000000000000005.

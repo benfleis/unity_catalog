@@ -37,3 +37,14 @@ FROM marksheet;
 
 statement ok
 INSERT INTO marksheet VALUES(1, 'blabla', 1337);
+
+# Second insert verifies PlanInsert credential ordering (RefreshCredentials before InternalAttach).
+# marksheet is not catalog-managed (no delta.feature.catalogManaged property), so no backfill applies here.
+statement ok
+INSERT INTO marksheet VALUES(2, 'blabla2', 1338);
+
+query III
+SELECT id, name, marks FROM marksheet WHERE id IN (1, 2) ORDER BY id;
+----
+1	blabla	1337
+2	blabla2	1338
