@@ -32,12 +32,14 @@ public:
 	void MarkDirty();
 	void AddPendingBackfill(idx_t version, const string &staged_file_name);
 	// Copies any queued staged commits to _delta_log/ and advances backfilled_through.
-	// Must be called with S3 credentials already registered (call RefreshCredentials first).
-	// Called from InternalAttach; kept separate so the locking story is clear.
-	void FlushPendingBackfills(ClientContext &context);
+	// Caller must hold attach_lock (pass the guard as proof); call RefreshCredentials first.
+	void FlushPendingBackfills(ClientContext &context, const lock_guard<mutex> &_attach_lock);
 
 private:
 	string AttachedCatalogName() const;
+	// Shared copy loop used by FlushPendingBackfills and the GetCommits path in InternalAttach.
+	// Caller must hold attach_lock.
+	void BackfillCommitList(ClientContext &context, const vector<UCAPICommit> &commits);
 	bool is_dirty = false;
 
 public:
