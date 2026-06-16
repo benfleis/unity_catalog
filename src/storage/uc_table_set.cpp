@@ -57,8 +57,9 @@ optional_ptr<CatalogEntry> TableInformation::GetVersion(ClientContext &context, 
 	}
 
 	// Not cached: attach and fetch schema — done outside entry_lock since it may block on I/O
-	InternalAttach(context);
+	// RefreshCredentials first: InternalAttach may flush pending backfills, thus needing the credentials.
 	RefreshCredentials(context);
+	InternalAttach(context);
 	auto &delta_catalog = *GetInternalCatalog();
 	auto &schema = delta_catalog.GetSchema(context, table_data->schema_name);
 	auto transaction = schema.GetCatalogTransaction(context);
@@ -125,6 +126,49 @@ void TableInformation::InternalDetach(ClientContext &context, const lock_guard<m
 	internal_attached_database = nullptr;
 }
 
+static void CopyStagedCommitToDeltaLog(ClientContext &context, const string &staged_path,
+                                       const string &storage_location, idx_t version) {
+	auto &fs = FileSystem::GetFileSystem(context);
+	string dst = StringUtil::Format("%s/_delta_log/%020llu.json", storage_location, version);
+	constexpr idx_t BUFFER_SIZE = 64ULL * 1024 * 1024;
+	auto buf = make_unsafe_uniq_array<char>(BUFFER_SIZE);
+	auto src_file = fs.OpenFile(staged_path, FileOpenFlags::FILE_FLAGS_READ);
+	auto dst_file = fs.OpenFile(dst, FileOpenFlags::FILE_FLAGS_WRITE | FileOpenFlags::FILE_FLAGS_FILE_CREATE_NEW);
+	int64_t n;
+	while ((n = src_file->Read(buf.get(), BUFFER_SIZE)) > 0) {
+		dst_file->Write(buf.get(), n);
+	}
+	dst_file->Close();
+}
+
+void TableInformation::AddPendingBackfill(idx_t version, const string &staged_file_name) {
+	lock_guard<mutex> l(attach_lock);
+	UCAPICommit entry;
+	entry.version = (int64_t)version;
+	entry.file_name = staged_file_name;
+	backfills_pending.push_back(std::move(entry));
+}
+
+void TableInformation::FlushPendingBackfills(ClientContext &context) {
+	// Dequeue all pending entries atomically; they are not retried on the next attach — the
+	// GetCommits loop below is the fallback for anything that fails here.
+	auto to_flush = std::move(backfills_pending);
+	for (auto &bf : to_flush) {
+		if (bf.version <= backfilled_through) {
+			continue;
+		}
+		string staged_path = table_data->storage_location + "/_delta_log/_staged_commits/" + bf.file_name;
+		try {
+			CopyStagedCommitToDeltaLog(context, staged_path, table_data->storage_location, (idx_t)bf.version);
+			backfilled_through = bf.version;
+		} catch (...) {
+			// Stop on first failure: continuing would advance backfilled_through past a gap,
+			// causing UC to believe commits it hasn't seen are durably backfilled.
+			break;
+		}
+	}
+}
+
 void TableInformation::MarkDirty() {
 	lock_guard<mutex> l(attach_lock);
 	is_dirty = true;
@@ -169,6 +213,9 @@ void TableInformation::InternalAttach(ClientContext &context) {
 		InternalDetach(context, l);
 		is_dirty = false;
 	}
+
+	FlushPendingBackfills(context);
+
 	if (internal_attached_database) {
 		return;
 	}
@@ -192,6 +239,20 @@ void TableInformation::InternalAttach(ClientContext &context) {
 		info.options["parent_catalog_schema"] = Value(schema.name);
 		info.options["parent_commit"] = Value(true);
 		info.options["max_catalog_version"] = Value::BIGINT(commits.latest_table_version);
+		for (auto &commit : commits.commits) {
+			if (commit.version <= backfilled_through) {
+				continue;
+			}
+			string staged_path = table_data->storage_location + "/_delta_log/_staged_commits/" + commit.file_name;
+			try {
+				CopyStagedCommitToDeltaLog(context, staged_path, table_data->storage_location, (idx_t)commit.version);
+				backfilled_through = commit.version;
+			} catch (...) {
+				// Stop on first failure — same reason as FlushPendingBackfills: gaps would corrupt
+				// backfilled_through and mislead UC about durability.
+				break;
+			}
+		}
 		if (!commits.commits.empty()) {
 			info.options["log_tail"] = BuildLogTailFromCommits(commits, table_data->storage_location);
 		}

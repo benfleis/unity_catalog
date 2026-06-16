@@ -46,8 +46,12 @@ void UCDeltaCCV2CommitExecute(ClientContext &context, TableFunctionInput &data_p
 	// Get relative path
 	string commit_file_name = commit_file_path.substr(commit_file_path.find_last_of("/\\") + 1);
 
+	// Queue backfill for next InternalAttach — S3 credential lookup requires a catalog transaction
+	// which is unavailable here (CommitCallback fires after MetaTransaction::Commit closes it).
+	table_entry->table.AddPendingBackfill(version, commit_file_name);
+
 	UCAPI::PostCommit(context, table_id, table_location, credentials, version, commit_timestamp, commit_file_name,
-	                  commit_file_size, file_modification_timestamp);
+	                  commit_file_size, file_modification_timestamp, table_entry->table.backfilled_through);
 
 	// Mark dirty after a successful commit so the next read re-attaches with a fresh log tail
 	table_entry->table.MarkDirty();

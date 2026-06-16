@@ -30,6 +30,11 @@ public:
 	void InternalCheckpoint(ClientContext &context, bool force);
 	bool IsCCV2() const;
 	void MarkDirty();
+	void AddPendingBackfill(idx_t version, const string &staged_file_name);
+	// Copies any queued staged commits to _delta_log/ and advances backfilled_through.
+	// Must be called with S3 credentials already registered (call RefreshCredentials first).
+	// Called from InternalAttach; kept separate so the locking story is clear.
+	void FlushPendingBackfills(ClientContext &context);
 
 private:
 	string AttachedCatalogName() const;
@@ -41,6 +46,15 @@ public:
 	unique_ptr<UCAPITable> table_data;
 	shared_ptr<AttachedDatabase> internal_attached_database;
 	optional_ptr<Transaction> active_transaction;
+
+	// Delta CMT backfill: after a successful commit, the staged file in _staged_commits/ must be
+	// copied to _delta_log/ and UC notified (via latest_backfilled_version in PostCommit). The copy
+	// can't happen inside CommitCallback because SecretManager needs an active catalog transaction
+	// (even for reads). Instead, each commit queues itself in backfills_pending; the queue is drained
+	// on the next InternalAttach, which always has a valid transaction and fresh S3 credentials.
+	// backfilled_through is a watermark: versions <= it are skipped to avoid redundant S3 round-trips.
+	vector<UCAPICommit> backfills_pending; // staged commits waiting to be copied to _delta_log/
+	int64_t backfilled_through = -1;       // highest version successfully copied
 
 	//! Guards schema_versions and dummy
 	mutex entry_lock;

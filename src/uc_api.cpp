@@ -243,10 +243,14 @@ UCAPICommitsResult UCAPI::GetCommits(ClientContext &ctx, const string &table_id,
 
 bool UCAPI::PostCommit(ClientContext &ctx, const string &table_id, const string &table_uri,
                        const UCCredentials &credentials, idx_t version, idx_t timestamp, const string &file_name,
-                       idx_t file_size, idx_t file_modification_timestamp) {
+                       idx_t file_size, idx_t file_modification_timestamp, int64_t latest_backfilled_version) {
+	string backfill_field;
+	if (latest_backfilled_version >= 0) {
+		backfill_field = StringUtil::Format(R"("latest_backfilled_version": %lld,)", latest_backfilled_version);
+	}
 	string body = StringUtil::Format(
-	    R"({"table_id": "%s", "table_uri": "%s/", "commit_info": {"version": %ld, "timestamp": %ld, "file_name": "%s", "file_size": %ld, "file_modification_timestamp": %ld}})",
-	    table_id.c_str(), table_uri.c_str(), version, timestamp, file_name.c_str(), file_size,
+	    R"({"table_id": "%s", "table_uri": "%s/", %s "commit_info": {"version": %ld, "timestamp": %ld, "file_name": "%s", "file_size": %ld, "file_modification_timestamp": %ld}})",
+	    table_id.c_str(), table_uri.c_str(), backfill_field.c_str(), version, timestamp, file_name.c_str(), file_size,
 	    file_modification_timestamp);
 	string url = credentials.endpoint + "/api/2.1/unity-catalog/delta/preview/commits";
 	auto api_result = MakeRequest(ctx, url, credentials.token, body);
