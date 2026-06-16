@@ -76,8 +76,7 @@ public:
 	                                     const UCCredentials &credentials);
 	static bool PostCommit(ClientContext &ctx, const string &table_id, const string &table_uri,
 	                       const UCCredentials &credentials, idx_t version, idx_t timestamp, const string &file_name,
-	                       idx_t file_size, idx_t file_modification_timestamp,
-	                       int64_t latest_backfilled_version = -1);
+	                       idx_t file_size, idx_t file_modification_timestamp, int64_t latest_backfilled_version = -1);
 };
 
 } // namespace duckdb
