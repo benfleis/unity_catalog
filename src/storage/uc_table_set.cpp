@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include "uc_api.hpp"
 #include "uc_utils.hpp"
 
@@ -147,40 +149,33 @@ static bool CopyStagedCommitToDeltaLog(ClientContext &context, const string &src
 	}
 }
 
-void TableInformation::AddPendingBackfill(idx_t version, const string &staged_file_name) {
-	lock_guard<mutex> l(attach_lock);
-	UCAPICommit entry;
-	entry.version = (int64_t)version;
-	entry.file_name = staged_file_name;
-	backfills_pending.push_back(std::move(entry));
-}
-
-void TableInformation::BackfillCommitList(ClientContext &context, const vector<UCAPICommit> &commits) {
-	for (auto &commit : commits) {
-		if (commit.version <= backfilled_through) {
+void TableInformation::BackfillCommits(ClientContext &context, const vector<UCAPICommit> &commits) {
+	vector<const UCAPICommit *> ordered;
+	ordered.reserve(commits.size());
+	for (auto &c : commits) {
+		ordered.push_back(&c);
+	}
+	std::sort(ordered.begin(), ordered.end(),
+	          [](const UCAPICommit *a, const UCAPICommit *b) { return a->version < b->version; });
+	for (auto *commit : ordered) {
+		if (commit->version <= backfilled_through) {
 			continue;
 		}
-		string src = table_data->storage_location + "/_delta_log/_staged_commits/" + commit.file_name;
+		string src = table_data->storage_location + "/_delta_log/_staged_commits/" + commit->file_name;
 		string dst =
-		    StringUtil::Format("%s/_delta_log/%020llu.json", table_data->storage_location, (uint64_t)commit.version);
+		    StringUtil::Format("%s/_delta_log/%020llu.json", table_data->storage_location, (uint64_t)commit->version);
 		try {
 			// TODO: consider? prefetch _delta_log/ listing (name + size) and skip copies where both match,
 			//       eliminating file/object open round trips if the list is >1 length.
 			if (!CopyStagedCommitToDeltaLog(context, src, dst)) {
 				// false = dst already exists; another session beat us — still update backfill version
 			}
-			backfilled_through = commit.version;
+			backfilled_through = commit->version;
 		} catch (...) {
 			// Real failure — stop to avoid advancing backfilled_through past a gap.
 			break;
 		}
 	}
-}
-
-void TableInformation::FlushPendingBackfills(ClientContext &context, const lock_guard<mutex> &) {
-	// Dequeue atomically; not retried — GetCommits path in InternalAttach is the fallback.
-	auto to_flush = std::move(backfills_pending);
-	BackfillCommitList(context, to_flush);
 }
 
 void TableInformation::MarkDirty() {
@@ -194,19 +189,12 @@ void TableInformation::SetEtag(const string &new_etag) {
 }
 
 bool TableInformation::IsCatalogManaged() const {
-	// OSS UC signals managed tables via table_type
-	// TODO: Databricks probably does too, confirm pls
-	if (table_data->table_type == "MANAGED") {
-		return true;
-	}
-
-	// Databricks: preview property
+	// Databricks preview property (pre-GA)
 	auto it = table_data->properties.find("delta.feature.catalogOwned-preview");
 	if (it != table_data->properties.end() && it->second == "supported") {
 		return true;
 	}
-
-	// Databricks: GA property
+	// Databricks GA + OSS UC v0.5+: set for tables that use the Delta CMT protocol
 	it = table_data->properties.find("delta.feature.catalogManaged");
 	return it != table_data->properties.end() && it->second == "supported";
 }
@@ -239,8 +227,6 @@ void TableInformation::InternalAttach(ClientContext &context) {
 		is_dirty = false;
 	}
 
-	FlushPendingBackfills(context, l);
-
 	if (internal_attached_database) {
 		return;
 	}
@@ -258,14 +244,14 @@ void TableInformation::InternalAttach(ClientContext &context) {
 
 	if (IsCatalogManaged()) {
 		auto &uc_catalog = catalog.Cast<UnityCatalog>();
-		auto commits = UCAPI::LoadTable(context, table_data->catalog_name, table_data->schema_name,
-		                                table_data->name, uc_catalog.credentials);
+		auto commits = UCAPI::LoadTable(context, table_data->catalog_name, table_data->schema_name, table_data->name,
+		                                uc_catalog.credentials);
 		etag = commits.etag;
 		info.options["parent_catalog"] = Value(catalog.GetName());
 		info.options["parent_catalog_schema"] = Value(schema.name);
 		info.options["parent_commit"] = Value(true);
 		info.options["max_catalog_version"] = Value::BIGINT(commits.latest_table_version);
-		BackfillCommitList(context, commits.commits);
+		BackfillCommits(context, commits.commits);
 		if (!commits.commits.empty()) {
 			info.options["log_tail"] = BuildLogTailFromCommits(commits, table_data->storage_location);
 		}

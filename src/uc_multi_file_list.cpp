@@ -7,9 +7,9 @@ static void AssertNoDeleteFiles(ClientContext &ctx, const UCScanPlanResult &resu
 	// TODO: replace with DV hooks
 	if (!result.delete_files.empty()) {
 		UC_LOG_WARNING(ctx,
-		                   "scan-plan: %s returned %zu delete file(s) — not yet supported; "
-		                   "results may be incorrect if deletes are present",
-		                   source, result.delete_files.size());
+		               "scan-plan: %s returned %zu delete file(s) — not yet supported; "
+		               "results may be incorrect if deletes are present",
+		               source, result.delete_files.size());
 		D_ASSERT(result.delete_files.empty());
 	}
 }

@@ -1,6 +1,7 @@
 # name: test/sql/databricks/scan_plan.test
 # description: scan plan API (IRC) against Databricks Unity Catalog
 # group: [databricks]
+
 #
 # Prerequisites — generate test data (once):
 #   python scripts/databricks_data_gen/generate_databricks_test_data.py from-custom-sql \

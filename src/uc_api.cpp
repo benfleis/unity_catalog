@@ -62,6 +62,8 @@ static string MakeRequest(ClientContext &ctx, const string &url, const string &t
 
 	HTTPHeaders hdrs(*ctx.db);
 	AuthenticateViaBearerToken(hdrs, token);
+	// TODO: conditional set if not override?
+	hdrs.Insert("Content-Type", "application/json");
 
 	unique_ptr<HTTPResponse> resp;
 	if (body.empty()) {
@@ -85,12 +87,17 @@ template <class TYPE, uint8_t TYPE_NUM, TYPE (*get_function)(duckdb_yyjson::yyjs
 static TYPE TemplatedTryGetYYJson(duckdb_yyjson::yyjson_val *obj, const string &field, TYPE default_val,
                                   bool fail_on_missing = true) {
 	auto val = yyjson_obj_get(obj, field.c_str());
-	if (val && yyjson_get_type(val) == TYPE_NUM) {
-		return get_function(val);
-	} else if (!fail_on_missing) {
-		return default_val;
+	if (val && !yyjson_is_null(val)) {
+		if (yyjson_get_type(val) == TYPE_NUM) {
+			return get_function(val);
+		}
+		throw IOException("Invalid field found while parsing field: " + field);
 	}
-	throw IOException("Invalid field found while parsing field: " + field);
+	// field absent or JSON null
+	if (fail_on_missing && !val) {
+		throw IOException("Invalid field found while parsing field: " + field);
+	}
+	return default_val;
 }
 
 static uint64_t TryGetNumFromObject(duckdb_yyjson::yyjson_val *obj, const string &field, bool fail_on_missing = true,
@@ -158,7 +165,6 @@ static UCAPIError CheckError(duckdb_yyjson::yyjson_val *api_result) {
 	return UCAPIError();
 }
 
-
 // # list catalogs
 //     echo "List of catalogs"
 //     curl --request GET
@@ -215,8 +221,7 @@ UCAPICommitsResult UCAPI::LoadTable(ClientContext &ctx, const string &catalog_na
 
 	auto error = CheckError(root);
 	if (error.HasError()) {
-		error.ThrowError(
-		    StringUtil::Format("Failed to load table %s.%s.%s", catalog_name, schema_name, table_name));
+		error.ThrowError(StringUtil::Format("Failed to load table %s.%s.%s", catalog_name, schema_name, table_name));
 	}
 
 	auto *metadata = yyjson_obj_get(root, "metadata");
@@ -241,21 +246,28 @@ UCAPICommitsResult UCAPI::LoadTable(ClientContext &ctx, const string &catalog_na
 		}
 	}
 
-	UC_LOG_DEBUG(ctx, "uc-api.LoadTable %s.%s.%s -> etag=%s commits=%zu latest_version=%lld", catalog_name,
-	             schema_name, table_name, result.etag.empty() ? "(none)" : result.etag, result.commits.size(),
+	UC_LOG_DEBUG(ctx, "uc-api.LoadTable %s.%s.%s -> etag=%s commits=%zu latest_version=%lld", catalog_name, schema_name,
+	             table_name, result.etag.empty() ? "(none)" : result.etag, result.commits.size(),
 	             (long long)result.latest_table_version);
 	return result;
 }
 
 string UCAPI::UpdateTable(ClientContext &ctx, const string &catalog_name, const string &schema_name,
-                          const string &table_name, const string &etag, const UCCredentials &credentials,
-                          idx_t version, idx_t timestamp, const string &file_name, idx_t file_size,
-                          idx_t file_modification_timestamp) {
-	string requirements = etag.empty() ? "" : StringUtil::Format(R"({"type": "assert-etag", "etag": "%s"})", etag);
+                          const string &table_name, const string &table_id, const string &etag,
+                          const UCCredentials &credentials, idx_t version, idx_t timestamp, const string &file_name,
+                          idx_t file_size, idx_t file_modification_timestamp, idx_t backfill_version) {
+	string uuid_req = StringUtil::Format(R"({"type": "assert-table-uuid", "uuid": "%s"})", table_id);
+	string etag_req = etag.empty() ? "" : StringUtil::Format(R"(, {"type": "assert-etag", "etag": "%s"})", etag);
+	string backfill_update;
+	if (backfill_version != idx_t(-1)) {
+		backfill_update =
+		    StringUtil::Format(R"(, {"action": "set-latest-backfilled-version", "latest-published-version": %lld})",
+		                       (long long)backfill_version);
+	}
 	string body = StringUtil::Format(
-	    R"({"requirements": [%s], "updates": [{"action": "add-commit", "commit": {"version": %lld, "timestamp": %lld, "file-name": "%s", "file-size": %lld, "file-modification-timestamp": %lld}}]})",
-	    requirements, (long long)version, (long long)timestamp, file_name, (long long)file_size,
-	    (long long)file_modification_timestamp);
+	    R"({"requirements": [%s%s], "updates": [{"action": "add-commit", "commit": {"version": %lld, "timestamp": %lld, "file-name": "%s", "file-size": %lld, "file-modification-timestamp": %lld}}%s]})",
+	    uuid_req, etag_req, (long long)version, (long long)timestamp, file_name, (long long)file_size,
+	    (long long)file_modification_timestamp, backfill_update);
 	// XXX: hard-coded delta v1 protocol; protocol negotiation via GET /delta/v1/config not yet implemented
 	string url = StringUtil::Format("%s/api/2.1/unity-catalog/delta/v1/catalogs/%s/schemas/%s/tables/%s",
 	                                credentials.endpoint, catalog_name, schema_name, table_name);
@@ -268,8 +280,7 @@ string UCAPI::UpdateTable(ClientContext &ctx, const string &catalog_name, const 
 
 	auto error = CheckError(root);
 	if (error.HasError()) {
-		error.ThrowError(
-		    StringUtil::Format("Failed to commit to %s.%s.%s", catalog_name, schema_name, table_name));
+		error.ThrowError(StringUtil::Format("Failed to commit to %s.%s.%s", catalog_name, schema_name, table_name));
 	}
 
 	string new_etag;
@@ -288,9 +299,9 @@ UCAPITableCredentials UCAPI::GetTableCredentials(ClientContext &ctx, const strin
 	UCAPITableCredentials result;
 	const char *operation = write ? "READ_WRITE" : "READ";
 	// XXX: hard-coded delta v1 protocol; protocol negotiation via GET /delta/v1/config not yet implemented
-	string url =
-	    StringUtil::Format("%s/api/2.1/unity-catalog/delta/v1/catalogs/%s/schemas/%s/tables/%s/credentials?operation=%s",
-	                       credentials.endpoint, catalog_name, schema_name, table_name, operation);
+	string url = StringUtil::Format(
+	    "%s/api/2.1/unity-catalog/delta/v1/catalogs/%s/schemas/%s/tables/%s/credentials?operation=%s",
+	    credentials.endpoint, catalog_name, schema_name, table_name, operation);
 	UC_LOG_DEBUG(ctx, "uc-api.GetTableCredentials %s.%s.%s op=%s", catalog_name, schema_name, table_name, operation);
 	auto api_result = MakeRequest(ctx, url, credentials.token);
 
@@ -382,7 +393,7 @@ vector<UCAPITable> UCAPI::GetTables(ClientContext &ctx, Catalog &catalog, const 
 	}
 
 	UC_LOG_DEBUG(ctx, "uc-api.GetTables catalog=%s schema=%s -> tables=%zu", catalog.GetDBPath(), schema,
-	                 result.size());
+	             result.size());
 	return result;
 }
 
@@ -629,10 +640,10 @@ UCScanPlanResult UCAPI::FetchPlanningResult(ClientContext &ctx, const string &ca
 	auto resp = MakeRequest(ctx, url, credentials.token);
 	auto result = ParseScanPlanResponse(resp);
 	UC_LOG_DEBUG(ctx, "scan-plan.FetchPlanningResult plan_id=%s -> status=%s inline=%zu plan_tasks=%zu delete=%zu%s%s",
-	                 plan_id, UCScanPlanStatusToString(result.status), result.file_scan_tasks.size(),
-	                 result.plan_tasks.size(), result.delete_files.size(),
-	                 result.status == UCScanPlanStatus::FAILED ? " error=" : "",
-	                 result.status == UCScanPlanStatus::FAILED ? result.error_message.c_str() : "");
+	             plan_id, UCScanPlanStatusToString(result.status), result.file_scan_tasks.size(),
+	             result.plan_tasks.size(), result.delete_files.size(),
+	             result.status == UCScanPlanStatus::FAILED ? " error=" : "",
+	             result.status == UCScanPlanStatus::FAILED ? result.error_message.c_str() : "");
 	return result;
 }
 
@@ -645,15 +656,15 @@ UCScanPlanResult UCAPI::PlanTableScan(ClientContext &ctx, const string &catalog_
 	string body = filter_json.empty() ? "{\"case-sensitive\":false}"
 	                                  : "{\"case-sensitive\":false,\"filter\":" + filter_json + "}";
 	UC_LOG_DEBUG(ctx, "scan-plan.PlanTableScan %s.%s.%s filter=%s", catalog_name, schema_name, table_name,
-	                 filter_json.empty() ? "(none)" : filter_json);
+	             filter_json.empty() ? "(none)" : filter_json);
 	auto resp = MakeRequest(ctx, url, credentials.token, body);
 	auto result = ParseScanPlanResponse(resp);
-	UC_LOG_DEBUG(ctx, "scan-plan.PlanTableScan %s.%s.%s -> status=%s plan_id=%s inline=%zu plan_tasks=%zu delete=%zu%s%s",
-	                 catalog_name, schema_name, table_name, UCScanPlanStatusToString(result.status),
-	                 result.plan_id.c_str(), result.file_scan_tasks.size(), result.plan_tasks.size(),
-	                 result.delete_files.size(),
-	                 result.status == UCScanPlanStatus::FAILED ? " error=" : "",
-	                 result.status == UCScanPlanStatus::FAILED ? result.error_message.c_str() : "");
+	UC_LOG_DEBUG(ctx,
+	             "scan-plan.PlanTableScan %s.%s.%s -> status=%s plan_id=%s inline=%zu plan_tasks=%zu delete=%zu%s%s",
+	             catalog_name, schema_name, table_name, UCScanPlanStatusToString(result.status), result.plan_id.c_str(),
+	             result.file_scan_tasks.size(), result.plan_tasks.size(), result.delete_files.size(),
+	             result.status == UCScanPlanStatus::FAILED ? " error=" : "",
+	             result.status == UCScanPlanStatus::FAILED ? result.error_message.c_str() : "");
 
 	constexpr int POLL_COUNT_MAX = 20;
 	constexpr int POLL_SLEEP_MS = 500;
@@ -680,8 +691,7 @@ UCScanPlanResult UCAPI::FetchScanTasks(ClientContext &ctx, const string &catalog
 		escaped += c;
 	}
 	string body = "{\"plan-task\":\"" + escaped + "\"}";
-	UC_LOG_DEBUG(ctx, "scan-plan.FetchScanTasks %s.%s.%s token=%s", catalog_name, schema_name, table_name,
-	                 plan_task);
+	UC_LOG_DEBUG(ctx, "scan-plan.FetchScanTasks %s.%s.%s token=%s", catalog_name, schema_name, table_name, plan_task);
 	auto resp = MakeRequest(ctx, url, credentials.token, body);
 
 	// FetchScanTasksResult is a bare ScanTasks object — no status field.
@@ -694,8 +704,8 @@ UCScanPlanResult UCAPI::FetchScanTasks(ClientContext &ctx, const string &catalog
 	result.status = UCScanPlanStatus::COMPLETED;
 	ParseScanTasksPayload(root, result);
 	UC_LOG_DEBUG(ctx, "scan-plan.FetchScanTasks %s.%s.%s token=%s -> inline=%zu plan_tasks=%zu delete=%zu",
-	                 catalog_name, schema_name, table_name, plan_task, result.file_scan_tasks.size(),
-	                 result.plan_tasks.size(), result.delete_files.size());
+	             catalog_name, schema_name, table_name, plan_task, result.file_scan_tasks.size(),
+	             result.plan_tasks.size(), result.delete_files.size());
 	return result;
 }
 
