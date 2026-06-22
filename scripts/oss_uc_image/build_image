@@ -1,0 +1,113 @@
+#!/bin/bash
+# Build the "duck" Unity Catalog test image in two steps:
+#   1. base   = unitycatalog built from a UC source checkout (its own multi-stage
+#               Dockerfile via Dockerfile.base; this runs sbt and is the slow part)
+#   2. final  = thin overlay (duck config + seeding entrypoint) from this dir
+#
+# The UC source checkout is located via $UC_REPO or --uc-repo (default below):
+#   UC_REPO=/path/to/unitycatalog ./build
+#   ./build --uc-repo /path/to/unitycatalog
+#
+# Image names (version in the TAG, the conventional way):
+#   base : duckdb/unitycatalog-base:<version>--<branch>-<gitref7>
+#   final: duckdb/unitycatalog:<version>--<branch>-<gitref7>
+#   alias: duckdb/unitycatalog:local            (run/uctl/smoke default to this)
+# <version> from version.sbt (lowercased); <branch> sanitized; <gitref7> 7-char
+# SHA; "-dirty" appended when the work tree has uncommitted changes. The base tag
+# matches the ref too, so a new commit triggers a fresh sbt build automatically.
+# A future pre-populated variant would slot in as duckdb/unitycatalog-<variant>.
+#
+# Step 1 is skipped if that base image already exists, unless you pass --rebuild-base.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Registry namespace + repo stem. Change IMAGE_NS if these shouldn't live under duckdb/.
+IMAGE_NS="${IMAGE_NS:-duckdb}"
+IMAGE_NAME="${IMAGE_NAME:-unitycatalog}"
+
+UC_REPO="${UC_REPO:-$HOME/src/d/unitycatalog}"
+rebuild_base=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --rebuild-base) rebuild_base=1; shift ;;
+    --uc-repo)      UC_REPO="${2:?--uc-repo needs a path}"; shift 2 ;;
+    --uc-repo=*)    UC_REPO="${1#*=}"; shift ;;
+    -h|--help)      sed -n '2,19p' "$0"; exit 0 ;;
+    *) echo "unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+
+if [ ! -f "$UC_REPO/build.sbt" ]; then
+  echo "error: UC source checkout not found at '$UC_REPO' (no build.sbt)." >&2
+  echo "       set UC_REPO=/path/to/unitycatalog or pass --uc-repo." >&2
+  exit 1
+fi
+REPO_DIR="$(cd "$UC_REPO" && pwd)"
+
+# --- apply kit patches to the UC source (idempotent) -------------------------
+# Local UC fixes the duck image needs (e.g. ambient-S3 creds in the CLI Delta
+# writer) live in patches/ so the build is reproducible from a clean checkout.
+# Already-applied (e.g. your working checkout) -> no-op; non-applying -> warn+skip
+# (local FS still works; only S3-external would NPE).
+shopt -s nullglob
+for patch in "$SCRIPT_DIR"/patches/*.patch; do
+  name="$(basename "$patch")"
+  if git -C "$REPO_DIR" apply --reverse --check "$patch" >/dev/null 2>&1; then
+    echo ">> patch already applied: $name"
+  elif git -C "$REPO_DIR" apply --check "$patch" >/dev/null 2>&1; then
+    git -C "$REPO_DIR" apply "$patch" && echo ">> applied patch: $name"
+  else
+    echo ">> WARNING: $name does not apply cleanly to $REPO_DIR -- skipping" >&2
+  fi
+done
+shopt -u nullglob
+
+# --- derive version / branch / gitref from the checkout -----------------------
+VERSION="$(sed -n 's/.*version[[:space:]]*:=[[:space:]]*"\(.*\)".*/\1/p' "$REPO_DIR/version.sbt" \
+            | head -1 | tr '[:upper:]' '[:lower:]')"
+VERSION="${VERSION:-unknown}"
+
+if FULL_SHA="$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null)"; then
+  GITREF7="$(git -C "$REPO_DIR" rev-parse --short=7 HEAD)"
+  BRANCH="$(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD)"        # "HEAD" if detached
+  # Sanitize anything not allowed in a docker tag down to '-'.
+  BRANCH="$(printf '%s' "$BRANCH" | tr -c 'A-Za-z0-9_.-' '-')"
+  DIRTY=""; [ -n "$(git -C "$REPO_DIR" status --porcelain)" ] && DIRTY="-dirty"
+else
+  FULL_SHA="unknown"; GITREF7="nogit"; BRANCH="nogit"; DIRTY=""
+fi
+
+TAG="${VERSION}--${BRANCH}-${GITREF7}${DIRTY}"
+
+BASE_IMAGE="${BASE_IMAGE:-${IMAGE_NS}/${IMAGE_NAME}-base:${TAG}}"
+FINAL_IMAGE="${FINAL_IMAGE:-${IMAGE_NS}/${IMAGE_NAME}:${TAG}}"
+STABLE_ALIAS="${STABLE_ALIAS:-${IMAGE_NS}/${IMAGE_NAME}:local}"
+
+echo ">> UC checkout : $REPO_DIR"
+echo ">> version     : $VERSION   branch: $BRANCH   gitref: ${GITREF7}${DIRTY}"
+echo ">> final image : $FINAL_IMAGE   (alias: $STABLE_ALIAS)"
+
+# --- step 1: base ------------------------------------------------------------
+if [ -n "$rebuild_base" ] || ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
+  echo ">> building base image $BASE_IMAGE (sbt build, slow)..."
+  # Dockerfile.base = unitycatalog/Dockerfile + one COURSIER_CACHE line so the
+  # dependency jars land where the runtime stage copies from. Context is the repo.
+  docker build -t "$BASE_IMAGE" -f "$SCRIPT_DIR/Dockerfile.base" "$REPO_DIR"
+else
+  echo ">> reusing existing base image $BASE_IMAGE (pass --rebuild-base to force)"
+fi
+
+# --- step 2: final overlay ---------------------------------------------------
+echo ">> building final image $FINAL_IMAGE..."
+docker build -t "$FINAL_IMAGE" \
+  --build-arg "BASE=$BASE_IMAGE" \
+  --label "org.opencontainers.image.title=${IMAGE_NS}/${IMAGE_NAME}" \
+  --label "org.opencontainers.image.version=$VERSION" \
+  --label "org.opencontainers.image.revision=$FULL_SHA" \
+  "$SCRIPT_DIR"
+
+docker tag "$FINAL_IMAGE" "$STABLE_ALIAS"
+
+echo ">> done: $FINAL_IMAGE"
+echo ">>       $STABLE_ALIAS -> same image (run/uctl/smoke default to this)"

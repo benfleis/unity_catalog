@@ -1,0 +1,95 @@
+#!/bin/bash
+# Self-contained smoke test: boots the duck image against a fresh temp dir,
+# creates + drops one table in each schema, and asserts that
+#   - a catalog-managed table in duck.managed writes a Delta log under
+#     <tmp>/duck/managed and carries the `catalogManaged` feature,
+#   - a plain external table in duck.external writes a Delta log under
+#     <tmp>/duck/external and does NOT carry it,
+# then tears everything down. Exit 0 = pass. Intended for CI.
+#
+# Env: FINAL_IMAGE (default duckdb/unitycatalog:local), DUCK_UC_PORT (default 8088).
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+IMAGE="${FINAL_IMAGE:-duckdb/unitycatalog:local}"
+PORT="${DUCK_UC_PORT:-8088}"
+CONTAINER="duck-uc-smoke-$$"
+TMPDIR_DATA="$(mktemp -d -t duck-uc-smoke-XXXXXX)"
+export DUCK_UC_CONTAINER="$CONTAINER"
+
+pass=0; fail=0
+ok()   { echo "  PASS: $1"; pass=$((pass+1)); }
+bad()  { echo "  FAIL: $1" >&2; fail=$((fail+1)); }
+
+cleanup() {
+  # Keep the container (and its logs) around on failure, or when SMOKE_KEEP=1,
+  # so a crash can be diagnosed. Note: not using `docker run --rm`, precisely so
+  # that an early exit doesn't delete the container before we can read its logs.
+  if [ "${SMOKE_KEEP:-}" = 1 ] || [ "$fail" -ne 0 ]; then
+    echo ">> leaving container '$CONTAINER' and data '$TMPDIR_DATA' for inspection" >&2
+    echo "   logs: docker logs $CONTAINER   |   remove: docker rm -f $CONTAINER; rm -rf $TMPDIR_DATA" >&2
+    return
+  fi
+  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+  rm -rf "$TMPDIR_DATA"
+}
+trap cleanup EXIT
+
+echo ">> starting $CONTAINER (image $IMAGE, data $TMPDIR_DATA)"
+docker run -d --name "$CONTAINER" -p "$PORT:8080" \
+  -v "$TMPDIR_DATA:$TMPDIR_DATA" -e "DUCK_UC_DATA_DIR=$TMPDIR_DATA" "$IMAGE" >/dev/null
+
+echo ">> waiting for seed (duck.managed + duck.external)..."
+ready=
+for _ in $(seq 1 90); do
+  if docker exec "$CONTAINER" bin/uc schema get --full_name duck.managed  >/dev/null 2>&1 \
+  && docker exec "$CONTAINER" bin/uc schema get --full_name duck.external >/dev/null 2>&1; then
+    ready=1; break
+  fi
+  docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null | grep -q true \
+    || { bad "container died early; logs:"; docker logs "$CONTAINER" 2>&1 | tail -40 >&2; exit 1; }
+  sleep 1
+done
+[ -n "$ready" ] || { bad "seed did not complete in time; logs:"; docker logs "$CONTAINER" 2>&1 | tail -40 >&2; exit 1; }
+ok "catalog 'duck' + schemas 'managed'/'external' seeded"
+
+uctl() { "$SCRIPT_DIR/uctl" "$@"; }
+
+# --- managed: catalog-managed ------------------------------------------------
+echo ">> duck.managed.pets (catalog-managed)"
+create_out="$(uctl create managed pets "id INT, name STRING")"
+if echo "$create_out" | grep -q "catalogManaged"; then
+  ok "managed table reports catalogManaged feature"
+else
+  bad "managed table missing catalogManaged feature; got: $create_out"
+fi
+if find "$TMPDIR_DATA/duck/managed" -name '_delta_log' -type d 2>/dev/null | grep -q .; then
+  ok "managed data written under host <tmp>/duck/managed"
+else
+  bad "no _delta_log found under $TMPDIR_DATA/duck/managed"
+fi
+
+# --- external: plain, not catalog-managed ------------------------------------
+echo ">> duck.external.pets (external, plain)"
+create_out="$(uctl create external pets "id INT, name STRING")"
+if echo "$create_out" | grep -q "catalogManaged"; then
+  bad "external table unexpectedly reports catalogManaged"
+else
+  ok "external table has no catalogManaged feature"
+fi
+if find "$TMPDIR_DATA/duck/external" -name '_delta_log' -type d 2>/dev/null | grep -q .; then
+  ok "external data written under host <tmp>/duck/external"
+else
+  bad "no _delta_log found under $TMPDIR_DATA/duck/external"
+fi
+
+# --- drop loop ---------------------------------------------------------------
+echo ">> drop"
+uctl drop managed  pets >/dev/null && ok "dropped duck.managed.pets"  || bad "drop duck.managed.pets failed"
+uctl drop external pets >/dev/null && ok "dropped duck.external.pets" || bad "drop duck.external.pets failed"
+docker exec "$CONTAINER" bin/uc table get --full_name duck.managed.pets >/dev/null 2>&1 \
+  && bad "duck.managed.pets still present after drop" || ok "duck.managed.pets gone after drop"
+
+echo
+echo "smoke test: $pass passed, $fail failed"
+[ "$fail" -eq 0 ]

@@ -1,0 +1,45 @@
+#!/bin/bash
+# Single source of truth for the `docker run` line. Starts the duck UC server
+# detached, binding the in-container data dir to a host dir.
+#
+#   ./run [HOSTDIR]
+#
+# HOSTDIR  host dir for table data, bind-mounted at the SAME absolute path inside
+#          the container (so UC's absolute file:// table locations resolve for a
+#          HOST client too). Defaults to a fresh temp dir (printed below).
+#
+# Env overrides: DUCK_UC_CONTAINER (default duck-uc), DUCK_UC_PORT (default 8080),
+#                FINAL_IMAGE (default duckdb/unitycatalog:local, the alias build tags).
+set -euo pipefail
+
+CONTAINER="${DUCK_UC_CONTAINER:-duck-uc}"
+PORT="${DUCK_UC_PORT:-8080}"
+IMAGE="${FINAL_IMAGE:-duckdb/unitycatalog:local}"
+HOSTDIR="${1:-$(mktemp -d -t duck-uc-data-XXXXXX)}"
+
+# Absolute path required for bind mounts.
+HOSTDIR="$(cd "$HOSTDIR" && pwd)"
+
+# Mount host==container path and point the server at it: UC records absolute
+# file:// locations, which only resolve for a host client if the path matches.
+docker run --rm -d \
+  --name "$CONTAINER" \
+  -p "$PORT:8080" \
+  -v "$HOSTDIR:$HOSTDIR" \
+  -e "DUCK_UC_DATA_DIR=$HOSTDIR" \
+  "$IMAGE" >/dev/null
+
+cat <<EOF
+started container : $CONTAINER
+image             : $IMAGE
+api               : http://localhost:$PORT
+data dir (host)   : $HOSTDIR
+  duck.managed  data -> $HOSTDIR/duck/managed/__unitystorage/...
+  duck.external data -> $HOSTDIR/duck/external/<table>/...
+
+manage tables     : ./uctl create managed  pets "id INT, name STRING"
+                    ./uctl create external pets "id INT, name STRING"
+                    ./uctl list  managed
+                    ./uctl drop  managed pets
+stop              : docker stop $CONTAINER
+EOF

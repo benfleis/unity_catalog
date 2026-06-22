@@ -1,0 +1,53 @@
+# name: test/sql/local_oss_unity_catalog/unity_catalog.test
+# description: test unity_catalog extension
+# group: [local_oss_unity_catalog]
+
+# Require statement will ensure this test is run with this extension loaded
+require parquet
+
+require unity_catalog
+
+require delta
+
+require httpfs
+
+require-env UC_TEST_SERVER_RUNNING
+
+statement ok
+CREATE SECRET (
+    TYPE UNITY_CATALOG,
+    TOKEN 'not-used',
+    ENDPOINT 'http://127.0.0.1:8080',
+    AWS_REGION 'us-east-2'
+);
+
+# Catalog Secret
+statement ok
+ATTACH 'duck' (TYPE unity_catalog);
+
+# TODO: can we fix this? Or at least throw a nicer error?
+statement error
+USE duck;
+----
+Catalog Error: SET schema: No catalog + schema named "duck" found.
+
+# We can switch to a specific schema
+statement ok
+USE duck.managed;
+
+statement ok
+USE memory;
+
+statement ok
+DETACH duck
+
+statement ok
+ATTACH 'duck' (TYPE unity_catalog, DEFAULT_SCHEMA 'managed');
+
+# Now this works
+statement ok
+USE duck;
+
+query II
+SELECT id, name FROM id_name LIMIT 1;
+2	two
