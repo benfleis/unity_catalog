@@ -137,9 +137,13 @@ struct UCScanPlanResult {
 
 class UCAPI {
 public:
-	// delta.yaml v1: GET /delta/v1/catalogs/{catalog}/schemas/{schema}/tables/{table}/credentials
+	// Vends temporary S3 credentials:
+	// - CMTs go via protocol v1 endpoint -> (GET /delta/v1/.../credentials); (returns 400/5116 for EXTERNALs)
+	// - EXTERNAL/plain tables -> POST /api/2.1/unity-catalog/temporary-table-credentials endpoint (keyed by table_id)
+	// `catalog_managed` flag selects which to use.
 	static UCAPITableCredentials GetTableCredentials(ClientContext &ctx, const string &catalog_name,
-	                                                 const string &schema_name, const string &table_name, bool write,
+	                                                 const string &schema_name, const string &table_name,
+	                                                 const string &table_id, bool catalog_managed, bool write,
 	                                                 const UCCredentials &credentials);
 	static string GetDefaultSchema(ClientContext &ctx, const UCCredentials &credentials);
 	static vector<string> GetCatalogs(ClientContext &ctx, Catalog &catalog, const UCCredentials &credentials);

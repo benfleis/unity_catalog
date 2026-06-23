@@ -262,17 +262,19 @@ string UCAPI::UpdateTable(ClientContext &ctx, const string &catalog_name, const 
 	if (backfill_version != idx_t(-1)) {
 		backfill_update =
 		    StringUtil::Format(R"(, {"action": "set-latest-backfilled-version", "latest-published-version": %lld})",
-		                       (long long)backfill_version);
+		                       (int64_t)backfill_version);
 	}
 	string body = StringUtil::Format(
 	    R"({"requirements": [%s%s], "updates": [{"action": "add-commit", "commit": {"version": %lld, "timestamp": %lld, "file-name": "%s", "file-size": %lld, "file-modification-timestamp": %lld}}%s]})",
-	    uuid_req, etag_req, (long long)version, (long long)timestamp, file_name, (long long)file_size,
-	    (long long)file_modification_timestamp, backfill_update);
+	    uuid_req, etag_req, (int64_t)version, (int64_t)timestamp, file_name, (int64_t)file_size,
+	    (int64_t)file_modification_timestamp, backfill_update);
 	// XXX: hard-coded delta v1 protocol; protocol negotiation via GET /delta/v1/config not yet implemented
 	string url = StringUtil::Format("%s/api/2.1/unity-catalog/delta/v1/catalogs/%s/schemas/%s/tables/%s",
 	                                credentials.endpoint, catalog_name, schema_name, table_name);
-	UC_LOG_DEBUG(ctx, "uc-api.UpdateTable %s.%s.%s version=%lld etag=%s", catalog_name, schema_name, table_name,
-	             (long long)version, etag.empty() ? "(none)" : etag);
+	string backfill_log = backfill_version == idx_t(-1) ? string("(none)") : to_string((int64_t)backfill_version);
+	UC_LOG_DEBUG(ctx, "uc-api.UpdateTable %s.%s.%s version=%lld table_id=%s etag=%s backfill_version=%s", catalog_name,
+	             schema_name, table_name, (int64_t)version, table_id.empty() ? "(none)" : table_id,
+	             etag.empty() ? "(none)" : etag, backfill_log);
 	auto api_result = MakeRequest(ctx, url, credentials.token, body);
 
 	YYJsonDoc doc(api_result);
@@ -294,15 +296,43 @@ string UCAPI::UpdateTable(ClientContext &ctx, const string &catalog_name, const 
 }
 
 UCAPITableCredentials UCAPI::GetTableCredentials(ClientContext &ctx, const string &catalog_name,
-                                                 const string &schema_name, const string &table_name, bool write,
+                                                 const string &schema_name, const string &table_name,
+                                                 const string &table_id, bool catalog_managed, bool write,
                                                  const UCCredentials &credentials) {
 	UCAPITableCredentials result;
 	const char *operation = write ? "READ_WRITE" : "READ";
-	// XXX: hard-coded delta v1 protocol; protocol negotiation via GET /delta/v1/config not yet implemented
+
+	if (!catalog_managed) {
+		// EXTERNAL / plain Delta: the /delta/v1 credentials endpoint rejects these (HTTP 400, 5116).
+		// Use the temporary-table-credentials endpoint, keyed by table_id.
+		string url = credentials.endpoint + "/api/2.1/unity-catalog/temporary-table-credentials";
+		string body = StringUtil::Format(R"({"table_id": "%s", "operation": "%s"})", table_id, operation);
+		UC_LOG_DEBUG(ctx, "uc-api.GetTableCredentials %s.%s.%s op=%s managed=0 table_id=%s", catalog_name, schema_name,
+		             table_name, operation, table_id);
+		auto api_result = MakeRequest(ctx, url, credentials.token, body);
+
+		YYJsonDoc doc(api_result);
+		auto *root = doc.Root();
+		auto error = CheckError(root);
+		if (error.HasError()) {
+			error.ThrowError(StringUtil::Format("Failed to get table credentials for %s.%s.%s", catalog_name,
+			                                    schema_name, table_name));
+		}
+		auto *aws = yyjson_obj_get(root, "aws_temp_credentials");
+		if (aws && yyjson_is_obj(aws)) {
+			result.key_id = TryGetStrFromObject(aws, "access_key_id", false);
+			result.secret = TryGetStrFromObject(aws, "secret_access_key", false);
+			result.session_token = TryGetStrFromObject(aws, "session_token", false);
+		}
+		return result;
+	}
+
+	// Managed (catalog-managed) Delta: delta.yaml v1 credentials endpoint.
 	string url = StringUtil::Format(
 	    "%s/api/2.1/unity-catalog/delta/v1/catalogs/%s/schemas/%s/tables/%s/credentials?operation=%s",
 	    credentials.endpoint, catalog_name, schema_name, table_name, operation);
-	UC_LOG_DEBUG(ctx, "uc-api.GetTableCredentials %s.%s.%s op=%s", catalog_name, schema_name, table_name, operation);
+	UC_LOG_DEBUG(ctx, "uc-api.GetTableCredentials %s.%s.%s op=%s managed=1", catalog_name, schema_name, table_name,
+	             operation);
 	auto api_result = MakeRequest(ctx, url, credentials.token);
 
 	YYJsonDoc doc(api_result);

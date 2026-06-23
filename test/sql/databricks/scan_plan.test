@@ -32,7 +32,7 @@ CALL enable_logging(level='DEBUG');
 
 statement ok
 CREATE SECRET (
-    TYPE UNITY_CATALOG,
+    TYPE unity_catalog,
     TOKEN '${DATABRICKS_TOKEN}',
     ENDPOINT '${DATABRICKS_ENDPOINT}',
     AWS_REGION '${DATABRICKS_REGION}'
@@ -43,7 +43,7 @@ CREATE SECRET (
 #
 
 statement ok
-ATTACH 'duckdb_testing' AS uc (TYPE UNITY_CATALOG, READ_ONLY, DEFAULT_SCHEMA 'main',
+ATTACH 'duckdb_testing' AS uc (TYPE unity_catalog, READ_ONLY, DEFAULT_SCHEMA 'main',
     scan_plan_endpoint '${DATABRICKS_SCAN_PLAN_ENDPOINT}');
 
 statement ok
