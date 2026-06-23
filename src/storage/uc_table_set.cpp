@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include "uc_api.hpp"
 #include "uc_logging.hpp"
 #include "uc_utils.hpp"
@@ -90,7 +92,8 @@ void TableInformation::RefreshCredentials(ClientContext &context) {
 	auto &secret_manager = SecretManager::Get(context);
 	// Get Credentials from UCAPI
 	auto table_credentials = UCAPI::GetTableCredentials(
-	    context, table_data->table_id, !(catalog.access_mode == AccessMode::READ_ONLY), catalog.credentials);
+	    context, table_data->catalog_name, table_data->schema_name, table_data->name, table_data->table_id,
+	    IsCatalogManaged(), !(catalog.access_mode == AccessMode::READ_ONLY), catalog.credentials);
 
 	// Inject secret into secret manager scoped to this path
 	CreateSecretInput input;
@@ -151,44 +154,37 @@ static bool CopyStagedCommitToDeltaLog(ClientContext &context, const string &src
 	}
 }
 
-void TableInformation::AddPendingBackfill(idx_t version, const string &staged_file_name) {
-	lock_guard<mutex> l(attach_lock);
-	UCAPICommit entry;
-	entry.version = (int64_t)version;
-	entry.file_name = staged_file_name;
-	backfills_pending.push_back(std::move(entry));
-}
-
-void TableInformation::BackfillCommitList(ClientContext &context, const vector<UCAPICommit> &commits) {
-	for (auto &commit : commits) {
-		if (commit.version <= backfilled_through) {
+void TableInformation::BackfillCommits(ClientContext &context, const vector<UCAPICommit> &commits) {
+	vector<const UCAPICommit *> ordered;
+	ordered.reserve(commits.size());
+	for (auto &c : commits) {
+		ordered.push_back(&c);
+	}
+	std::sort(ordered.begin(), ordered.end(),
+	          [](const UCAPICommit *a, const UCAPICommit *b) { return a->version < b->version; });
+	for (auto *commit : ordered) {
+		if (commit->version <= backfilled_through) {
 			continue;
 		}
-		string src = table_data->storage_location + "/_delta_log/_staged_commits/" + commit.file_name;
+		string src = table_data->storage_location + "/_delta_log/_staged_commits/" + commit->file_name;
 		string dst =
-		    StringUtil::Format("%s/_delta_log/%020llu.json", table_data->storage_location, (uint64_t)commit.version);
+		    StringUtil::Format("%s/_delta_log/%020llu.json", table_data->storage_location, (uint64_t)commit->version);
 		try {
 			// TODO: consider? prefetch _delta_log/ listing (name + size) and skip copies where both match,
 			//       eliminating file/object open round trips if the list is >1 length.
 			if (!CopyStagedCommitToDeltaLog(context, src, dst)) {
 				// false = dst already exists; another session beat us — still update backfill version
 			}
-			backfilled_through = commit.version;
+			backfilled_through = commit->version;
 		} catch (std::exception &e) {
 			// Real failure — stop to avoid advancing backfilled_through past a gap. Surface it: a
 			// silently-swallowed backfill failure lets staged commits accumulate until the server
 			// rejects further commits (HTTP 429, "too many un-backfilled commits").
-			UC_LOG_WARNING(context, "uc.BackfillCommitList version=%lld src=%s dst=%s failed: %s",
-			               (long long)commit.version, src.c_str(), dst.c_str(), e.what());
+			UC_LOG_WARNING(context, "uc.BackfillCommits version=%lld src=%s dst=%s failed: %s",
+			               (long long)commit->version, src.c_str(), dst.c_str(), e.what());
 			break;
 		}
 	}
-}
-
-void TableInformation::FlushPendingBackfills(ClientContext &context, const lock_guard<mutex> &) {
-	// Dequeue atomically; not retried — GetCommits path in InternalAttach is the fallback.
-	auto to_flush = std::move(backfills_pending);
-	BackfillCommitList(context, to_flush);
 }
 
 void TableInformation::MarkDirty() {
@@ -196,14 +192,18 @@ void TableInformation::MarkDirty() {
 	is_dirty = true;
 }
 
-bool TableInformation::IsCCV2() const {
-	// Check for the preview setting
+void TableInformation::SetEtag(const string &new_etag) {
+	lock_guard<mutex> l(attach_lock);
+	etag = new_etag;
+}
+
+bool TableInformation::IsCatalogManaged() const {
+	// Databricks preview property (pre-GA)
 	auto it = table_data->properties.find("delta.feature.catalogOwned-preview");
 	if (it != table_data->properties.end() && it->second == "supported") {
 		return true;
 	}
-
-	// Check for the GA setting
+	// Databricks GA + OSS UC v0.5+: set for tables that use the Delta CMT protocol
 	it = table_data->properties.find("delta.feature.catalogManaged");
 	return it != table_data->properties.end() && it->second == "supported";
 }
@@ -236,8 +236,6 @@ void TableInformation::InternalAttach(ClientContext &context) {
 		is_dirty = false;
 	}
 
-	FlushPendingBackfills(context, l);
-
 	if (internal_attached_database) {
 		return;
 	}
@@ -253,15 +251,16 @@ void TableInformation::InternalAttach(ClientContext &context) {
 	                {"unity_table_id", Value(table_data->table_id)}};
 	info.path = table_data->storage_location;
 
-	if (IsCCV2()) {
+	if (IsCatalogManaged()) {
 		auto &uc_catalog = catalog.Cast<UnityCatalog>();
-		auto commits =
-		    UCAPI::GetCommits(context, table_data->table_id, table_data->storage_location, uc_catalog.credentials);
+		auto commits = UCAPI::LoadTable(context, table_data->catalog_name, table_data->schema_name, table_data->name,
+		                                uc_catalog.credentials);
+		etag = commits.etag;
 		info.options["parent_catalog"] = Value(catalog.GetName());
 		info.options["parent_catalog_schema"] = Value(schema.name);
 		info.options["parent_commit"] = Value(true);
 		info.options["max_catalog_version"] = Value::BIGINT(commits.latest_table_version);
-		BackfillCommitList(context, commits.commits);
+		BackfillCommits(context, commits.commits);
 		if (!commits.commits.empty()) {
 			info.options["log_tail"] = BuildLogTailFromCommits(commits, table_data->storage_location);
 		}
