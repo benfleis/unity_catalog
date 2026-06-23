@@ -1,6 +1,7 @@
 # name: test/sql/local_oss_unity_catalog/managed_catalog.test
 # description: read and write on a catalog-managed table via delta.yaml v1 (LoadTable / UpdateTable)
 # group: [local_oss_unity_catalog]
+
 #
 # Requires a LOCAL (non-docker) OSS UC server (managed tables are on by default), seeded with
 # the duck catalog: duck.managed.id_name_{ro,rw} are catalog-managed (CMT) Delta tables.

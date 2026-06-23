@@ -1,6 +1,7 @@
 # name: test/sql/local_oss_unity_catalog/uc_catalog_write.test
 # description: write to a plain (non-CMT) EXTERNAL Delta table via UC
 # group: [local_oss_unity_catalog]
+
 #
 # Writes go to duck.external.id_name_rw — a plain (EXTERNAL, non-catalog-managed) Delta table
 # seeded by scripts/oss_uc_local/seed_tables. It is a dedicated _rw write target: no read test
