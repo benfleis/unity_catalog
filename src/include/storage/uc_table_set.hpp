@@ -9,12 +9,27 @@
 #pragma once
 
 #include "storage/uc_table_entry.hpp"
+#include "uc_mutex_protected.hpp"
 
 namespace duckdb {
 struct CreateTableInfo;
 class UCResult;
 class UnityCatalog;
 class UCSchemaEntry;
+
+// Mutable catalog-managed commit state for one table, read together when building an
+// UpdateTable (add-commit) request. etag is the optimistic-concurrency token (assert-etag);
+// backfilled_through is the published-version watermark (set-latest-backfilled-version). They
+// must be read as a consistent snapshot: a torn read could pair a stale etag with a newer
+// watermark. Wrapped in MutexProtected (TableInformation::commit_state) so the pair is only ever
+// accessed under its lock — copy a snapshot out via with_locked() to use past the critical section.
+struct CommitState {
+	string etag; // from LoadTable response; sent as assert-etag in UpdateTable (add-commit) calls
+	// Delta CMT backfill: on InternalAttach, LoadTable returns outstanding staged commits;
+	// BackfillCommits copies them to _delta_log/ and advances this watermark.
+	// Versions <= backfilled_through are skipped to avoid redundant S3 round-trips.
+	int64_t backfilled_through = -1; // highest version successfully copied
+};
 
 class TableInformation {
 public:
@@ -29,32 +44,36 @@ public:
 	void InternalDetach(ClientContext &context, const lock_guard<mutex> &_attach_lock);
 	void InternalCheckpoint(ClientContext &context, bool force);
 	bool IsCatalogManaged() const;
-	void MarkDirty();
-	void SetEtag(const string &new_etag);
+	// is_dirty still lives under attach_lock; the guard-by-ref proves the caller holds it (idiom
+	// from InternalDetach). commit_state moved to a MutexProtected member below.
+	void MarkDirty(const lock_guard<mutex> &_attach_lock);
 
 private:
 	string AttachedCatalogName() const;
-	// Caller must hold attach_lock.
-	// Caller must hold attach_lock.
-	void BackfillCommits(ClientContext &context, const vector<UCAPICommit> &commits);
+	// Copies outstanding staged commits to _delta_log/ (file I/O, NOT under commit_state's lock).
+	// Takes the current watermark, returns the highest version successfully copied.
+	int64_t BackfillCommits(ClientContext &context, const vector<UCAPICommit> &commits, int64_t backfilled_through);
 	bool is_dirty = false;
 
 public:
+	// commit_state {etag, backfilled_through}: accessed only via with_locked(), so the pair is never
+	// torn and there is no unlocked path. Public is safe — MutexProtected gates every access.
+	MutexProtected<CommitState> commit_state;
 	UnityCatalog &catalog;
 	UCSchemaEntry &schema;
 	unique_ptr<UCAPITable> table_data;
 	shared_ptr<AttachedDatabase> internal_attached_database;
 	optional_ptr<Transaction> active_transaction;
-	string etag; // from LoadTable response; sent as assert-etag in UpdateTable (add-commit) calls
-
-	// Delta CMT backfill: on InternalAttach, LoadTable returns outstanding staged commits;
-	// BackfillCommits copies them to _delta_log/ and advances this watermark.
-	// Versions <= backfilled_through are skipped to avoid redundant S3 round-trips.
-	int64_t backfilled_through = -1; // highest version successfully copied
 
 	//! Guards schema_versions and dummy
 	mutex entry_lock;
-	//! Guards is_dirty and internal_attached_database
+	//! Guards is_dirty and internal_attached_database (commit_state is now self-guarding above)
+	//
+	// TODO(locks): widen the MutexProtected pattern used by commit_state to also cover is_dirty and
+	// internal_attached_database — fold all three into a single MutexProtected<AttachState> and drop
+	// this bare mutex. That makes unlocked access unrepresentable (subsuming the TODO(race) reads of
+	// internal_attached_database in GetInternalCatalog/InternalCheckpoint). It MUST stay ONE protected
+	// struct to preserve InternalAttach's single critical section across all three.
 	mutex attach_lock;
 	//! Map of delta version to TableCatalogEntry for the table
 	unordered_map<idx_t, unique_ptr<CatalogEntry>> schema_versions;

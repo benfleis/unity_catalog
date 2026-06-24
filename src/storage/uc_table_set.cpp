@@ -81,6 +81,9 @@ optional_ptr<CatalogEntry> TableInformation::GetVersion(ClientContext &context, 
 };
 
 optional_ptr<Catalog> TableInformation::GetInternalCatalog() {
+	// TODO(race): unsynchronized read of internal_attached_database — a concurrent InternalDetach
+	// (under attach_lock) can null it, risking a null/dangling deref. Needs locking or a guarantee
+	// the caller holds attach_lock / has a live attach.
 	return internal_attached_database->GetCatalog();
 }
 
@@ -154,7 +157,10 @@ static bool CopyStagedCommitToDeltaLog(ClientContext &context, const string &src
 	}
 }
 
-void TableInformation::BackfillCommits(ClientContext &context, const vector<UCAPICommit> &commits) {
+int64_t TableInformation::BackfillCommits(ClientContext &context, const vector<UCAPICommit> &commits,
+                                          int64_t backfilled_through) {
+	// Operates on a local watermark and does file I/O; the caller writes the returned value back into
+	// commit_state under its lock, so commit_state's lock is never held across these copies.
 	vector<const UCAPICommit *> ordered;
 	ordered.reserve(commits.size());
 	for (auto &c : commits) {
@@ -185,16 +191,11 @@ void TableInformation::BackfillCommits(ClientContext &context, const vector<UCAP
 			break;
 		}
 	}
+	return backfilled_through;
 }
 
-void TableInformation::MarkDirty() {
-	lock_guard<mutex> l(attach_lock);
+void TableInformation::MarkDirty(const lock_guard<mutex> &_attach_lock) {
 	is_dirty = true;
-}
-
-void TableInformation::SetEtag(const string &new_etag) {
-	lock_guard<mutex> l(attach_lock);
-	etag = new_etag;
 }
 
 bool TableInformation::IsCatalogManaged() const {
@@ -255,12 +256,19 @@ void TableInformation::InternalAttach(ClientContext &context) {
 		auto &uc_catalog = catalog.Cast<UnityCatalog>();
 		auto commits = UCAPI::LoadTable(context, table_data->catalog_name, table_data->schema_name, table_data->name,
 		                                uc_catalog.credentials);
-		etag = commits.etag;
 		info.options["parent_catalog"] = Value(catalog.GetName());
 		info.options["parent_catalog_schema"] = Value(schema.name);
 		info.options["parent_commit"] = Value(true);
 		info.options["max_catalog_version"] = Value::BIGINT(commits.latest_table_version);
-		BackfillCommits(context, commits.commits);
+		// Backfill outside commit_state's lock (file I/O), then publish {etag, watermark} atomically.
+		// Only InternalAttach writes backfilled_through and it is serialized by attach_lock, so the
+		// start watermark read here is stable.
+		int64_t start_wm = commit_state.with_locked([](const CommitState &s) { return s.backfilled_through; });
+		int64_t new_wm = BackfillCommits(context, commits.commits, start_wm);
+		commit_state.with_locked([&](CommitState &s) {
+			s.etag = commits.etag;
+			s.backfilled_through = new_wm;
+		});
 		if (!commits.commits.empty()) {
 			info.options["log_tail"] = BuildLogTailFromCommits(commits, table_data->storage_location);
 		}
@@ -287,6 +295,9 @@ void TableInformation::InternalCheckpoint(ClientContext &context, bool force) {
 	D_ASSERT(table_data);
 	RefreshCredentials(context);
 	InternalAttach(context);
+	// TODO(race): unsynchronized read of internal_attached_database (same hazard as
+	// GetInternalCatalog). InternalAttach above released attach_lock, so another thread could detach
+	// before this deref.
 	internal_attached_database->GetTransactionManager().Checkpoint(context, force);
 }
 

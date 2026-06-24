@@ -1,3 +1,4 @@
+#include "duckdb/common/helper.hpp"
 #include <cstddef>
 #include <sys/stat.h>
 
@@ -31,6 +32,19 @@ struct YYJsonDoc {
 
 	duckdb_yyjson::yyjson_doc *doc;
 };
+
+static string YYJsonEncodeString(const string &raw) {
+	duckdb_yyjson::yyjson_val val;
+	duckdb_yyjson::yyjson_set_strn(&val, raw.data(), raw.size());
+	size_t encoded_len = 0;
+	char *encoded = duckdb_yyjson::yyjson_val_write(&val, duckdb_yyjson::YYJSON_WRITE_NOFLAG, &encoded_len);
+	if (!encoded) {
+		throw InvalidInputException("yyjson string encoding failed");
+	}
+	string result(encoded, encoded_len);
+	free(encoded);
+	return result;
+}
 
 static void AuthenticateViaBearerToken(HTTPHeaders &hdrs, const string &token) {
 	if (!token.empty()) {
@@ -74,7 +88,9 @@ static string MakeRequest(ClientContext &ctx, const string &url, const string &t
 	}
 
 	if (!resp->Success()) {
-		throw IOException("Request to '%s' failed: '%s'", url, resp->GetError());
+		throw IOException("Request to '%s' failed (HTTP %d): %s\nResponse body: %s", url,
+		                  static_cast<int>(resp->status), resp->GetError(),
+		                  resp->body.empty() ? "(empty)" : resp->body);
 	}
 	return std::move(resp->body);
 }
@@ -89,8 +105,9 @@ static TYPE TemplatedTryGetYYJson(duckdb_yyjson::yyjson_val *obj, const string &
 		}
 		throw IOException("Invalid field found while parsing field: " + field);
 	}
-	// field absent or JSON null
-	if (fail_on_missing && !val) {
+	// field absent or JSON null: both are "missing" for a required field. The spec declares no
+	// response property nullable, so a null in a required field is a non-conforming response.
+	if (fail_on_missing) {
 		throw IOException("Invalid field found while parsing field: " + field);
 	}
 	return default_val;
@@ -225,26 +242,51 @@ UCAPICommitsResult UCAPI::LoadTable(ClientContext &ctx, const string &catalog_na
 		result.etag = TryGetStrFromObject(metadata, "etag", false);
 	}
 
-	result.latest_table_version = TryGetNumFromObject(root, "latest-table-version", false, 0);
+	// `latest-table-version` is optional per spec but gates which staged commits are visible
+	// (max_catalog_version), so a default of 0 would hide them all. Fall back to the highest
+	// commit version: when present it equals that anyway (it's the latest ratified version).
+	auto *ltv = yyjson_obj_get(root, "latest-table-version");
+	bool ltv_present = ltv && !yyjson_is_null(ltv);
+	int64_t server_ltv = (int64_t)TryGetNumFromObject(root, "latest-table-version", false, 0);
 
+	int64_t max_commit_version = 0;
 	auto *commits = yyjson_obj_get(root, "commits");
 	if (commits && yyjson_is_arr(commits)) {
 		size_t idx, max;
 		duckdb_yyjson::yyjson_val *commit;
 		yyjson_arr_foreach(commits, idx, max, commit) {
 			UCAPICommit c;
-			c.version = TryGetNumFromObject(commit, "version", true);
-			c.timestamp = TryGetNumFromObject(commit, "timestamp", true);
+			c.version = (int64_t)TryGetNumFromObject(commit, "version", true);
+			c.timestamp = (int64_t)TryGetNumFromObject(commit, "timestamp", true);
 			c.file_name = TryGetStrFromObject(commit, "file-name", true);
-			c.file_size = TryGetNumFromObject(commit, "file-size", true);
-			c.file_modification_timestamp = TryGetNumFromObject(commit, "file-modification-timestamp", true);
+			c.file_size = (int64_t)TryGetNumFromObject(commit, "file-size", true);
+			c.file_modification_timestamp = (int64_t)TryGetNumFromObject(commit, "file-modification-timestamp", true);
+			if (c.version > max_commit_version) {
+				max_commit_version = c.version;
+			}
 			result.commits.push_back(c);
 		}
 	}
 
+	// In case server ltv exceeds max commit, take server's value. Shouldn't occur, check below!
+	result.latest_table_version = server_ltv > max_commit_version ? server_ltv : max_commit_version;
+
+	// Invariant: when the server reports a latest version alongside unbackfilled commits, it must
+	// equal the highest commit; the check is exempt if ltv is absent or there are no commits.
+	// DEBUG asserts here; (consider always failing?). Release recovers via max() above; only
+	// the absent-with-commits case is logged below — a present-but-unequal ltv is not.
+	D_ASSERT(server_ltv == max_commit_version || !ltv_present || result.commits.empty());
+	if (!ltv_present && !result.commits.empty()) {
+		UC_LOG_WARNING(ctx,
+		               "uc-api.LoadTable %s.%s.%s -> incoherent response: %zu commit(s) but no "
+		               "latest-table-version; using max commit version %lld as max_catalog_version",
+		               catalog_name, schema_name, table_name, result.commits.size(),
+		               (int64_t)result.latest_table_version);
+	}
+
 	UC_LOG_DEBUG(ctx, "uc-api.LoadTable %s.%s.%s -> etag=%s commits=%zu latest_version=%lld", catalog_name, schema_name,
 	             table_name, result.etag.empty() ? "(none)" : result.etag, result.commits.size(),
-	             (long long)result.latest_table_version);
+	             (int64_t)result.latest_table_version);
 	return result;
 }
 
@@ -253,7 +295,9 @@ string UCAPI::UpdateTable(ClientContext &ctx, const string &catalog_name, const 
                           const UCCredentials &credentials, idx_t version, idx_t timestamp, const string &file_name,
                           idx_t file_size, idx_t file_modification_timestamp, idx_t backfill_version) {
 	string uuid_req = StringUtil::Format(R"({"type": "assert-table-uuid", "uuid": "%s"})", table_id);
-	string etag_req = etag.empty() ? "" : StringUtil::Format(R"(, {"type": "assert-etag", "etag": "%s"})", etag);
+	// YYJsonEncodeString returns a JSON string token w/ quotes, so no quotes in format below
+	string etag_req =
+	    etag.empty() ? "" : StringUtil::Format(R"(, {"type": "assert-etag", "etag": %s})", YYJsonEncodeString(etag));
 	string backfill_update;
 	if (backfill_version != idx_t(-1)) {
 		backfill_update =
