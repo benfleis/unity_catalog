@@ -19,16 +19,17 @@ class UCSchemaEntry;
 
 // Mutable catalog-managed commit state for one table, read together when building an
 // UpdateTable (add-commit) request. etag is the optimistic-concurrency token (assert-etag);
-// backfilled_through is the published-version watermark (set-latest-backfilled-version). They
+// backfilled_version is the backfill watermark (sent via set-latest-backfilled-version). They
 // must be read as a consistent snapshot: a torn read could pair a stale etag with a newer
 // watermark. Wrapped in MutexProtected (TableInformation::commit_state) so the pair is only ever
 // accessed under its lock — copy a snapshot out via with_locked() to use past the critical section.
 struct CommitState {
 	string etag; // from LoadTable response; sent as assert-etag in UpdateTable (add-commit) calls
 	// Delta CMT backfill: on InternalAttach, LoadTable returns outstanding staged commits;
-	// BackfillCommits copies them to _delta_log/ and advances this watermark.
-	// Versions <= backfilled_through are skipped to avoid redundant S3 round-trips.
-	int64_t backfilled_through = -1; // highest version successfully copied
+	// BackfillCommits copies them into _delta_log/ and advances this watermark.
+	// backfilled_version = newest version copied into _delta_log/ (a plain Delta reader sees it
+	// without the catalog gate). Versions <= it are skipped to avoid redundant S3 round-trips.
+	int64_t backfilled_version = -1; // highest version successfully copied
 };
 
 class TableInformation {
@@ -52,11 +53,11 @@ private:
 	string AttachedCatalogName() const;
 	// Copies outstanding staged commits to _delta_log/ (file I/O, NOT under commit_state's lock).
 	// Takes the current watermark, returns the highest version successfully copied.
-	int64_t BackfillCommits(ClientContext &context, const vector<UCAPICommit> &commits, int64_t backfilled_through);
+	int64_t BackfillCommits(ClientContext &context, const vector<UCAPICommit> &commits, int64_t backfilled_version);
 	bool is_dirty = false;
 
 public:
-	// commit_state {etag, backfilled_through}: accessed only via with_locked(), so the pair is never
+	// commit_state {etag, backfilled_version}: accessed only via with_locked(), so the pair is never
 	// torn and there is no unlocked path. Public is safe — MutexProtected gates every access.
 	MutexProtected<CommitState> commit_state;
 	UnityCatalog &catalog;

@@ -44,14 +44,14 @@ void UCDeltaCCV2CommitExecute(ClientContext &context, TableFunctionInput &data_p
 	// Get relative path
 	string commit_file_name = commit_file_path.substr(commit_file_path.find_last_of("/\\") + 1);
 
-	// One consistent snapshot: etag (assert-etag token) and backfilled_through must be paired from
+	// One consistent snapshot: etag (assert-etag token) and backfilled_version must be paired from
 	// the same locked read, else a concurrent re-attach could tear them. Copy out via with_locked so
 	// the lock is NOT held across the UpdateTable HTTP call below.
 	auto &table = table_entry->table;
 	CommitState cs = table.commit_state.with_locked([](const CommitState &s) { return s; });
 	string new_etag = UCAPI::UpdateTable(context, td.catalog_name, td.schema_name, td.name, td.table_id, cs.etag,
 	                                     credentials, version, commit_timestamp, commit_file_name, commit_file_size,
-	                                     file_modification_timestamp, (idx_t)cs.backfilled_through);
+	                                     file_modification_timestamp, (idx_t)cs.backfilled_version);
 
 	// Mark dirty so the next read re-attaches with a fresh log tail; cache the new etag for the next
 	// commit's assert-etag. (is_dirty under attach_lock; etag under commit_state's own lock.)

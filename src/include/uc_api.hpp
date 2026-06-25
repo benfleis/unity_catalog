@@ -60,7 +60,8 @@ struct UCAPICommit {
 
 struct UCAPICommitsResult {
 	vector<UCAPICommit> commits;
-	int64_t latest_table_version = 0;
+	// Newest version the catalog has assigned (may not yet be backfilled into _delta_log/).
+	int64_t ratified_version = 0; // JSON: latest-table-version
 	string etag;
 };
 
@@ -80,7 +81,7 @@ public:
 	                                    const UCCredentials &credentials);
 	static vector<UCAPISchema> GetSchemas(ClientContext &ctx, Catalog &catalog, const UCCredentials &credentials);
 	// delta.yaml v1: GET /delta/v1/catalogs/{catalog}/schemas/{schema}/tables/{table}
-	// Returns commits (unbackfilled CCv2) + latest-table-version + etag.
+	// Returns commits (backfillable CCv2) + latest-table-version + etag.
 	static UCAPICommitsResult LoadTable(ClientContext &ctx, const string &catalog_name, const string &schema_name,
 	                                    const string &table_name, const UCCredentials &credentials);
 	// delta.yaml v1: POST /delta/v1/catalogs/{catalog}/schemas/{schema}/tables/{table}

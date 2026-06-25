@@ -269,9 +269,9 @@ UCAPICommitsResult UCAPI::LoadTable(ClientContext &ctx, const string &catalog_na
 	}
 
 	// In case server ltv exceeds max commit, take server's value. Shouldn't occur, check below!
-	result.latest_table_version = server_ltv > max_commit_version ? server_ltv : max_commit_version;
+	result.ratified_version = server_ltv > max_commit_version ? server_ltv : max_commit_version;
 
-	// Invariant: when the server reports a latest version alongside unbackfilled commits, it must
+	// Invariant: when the server reports a latest version alongside backfillable commits, it must
 	// equal the highest commit; the check is exempt if ltv is absent or there are no commits.
 	// DEBUG asserts here; (consider always failing?). Release recovers via max() above; only
 	// the absent-with-commits case is logged below — a present-but-unequal ltv is not.
@@ -280,13 +280,12 @@ UCAPICommitsResult UCAPI::LoadTable(ClientContext &ctx, const string &catalog_na
 		UC_LOG_WARNING(ctx,
 		               "uc-api.LoadTable %s.%s.%s -> incoherent response: %zu commit(s) but no "
 		               "latest-table-version; using max commit version %lld as max_catalog_version",
-		               catalog_name, schema_name, table_name, result.commits.size(),
-		               (int64_t)result.latest_table_version);
+		               catalog_name, schema_name, table_name, result.commits.size(), (int64_t)result.ratified_version);
 	}
 
-	UC_LOG_DEBUG(ctx, "uc-api.LoadTable %s.%s.%s -> etag=%s commits=%zu latest_version=%lld", catalog_name, schema_name,
-	             table_name, result.etag.empty() ? "(none)" : result.etag, result.commits.size(),
-	             (int64_t)result.latest_table_version);
+	UC_LOG_DEBUG(ctx, "uc-api.LoadTable %s.%s.%s -> etag=%s commits=%zu ratified_version=%lld", catalog_name,
+	             schema_name, table_name, result.etag.empty() ? "(none)" : result.etag, result.commits.size(),
+	             (int64_t)result.ratified_version);
 	return result;
 }
 

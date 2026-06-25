@@ -75,6 +75,14 @@ WHERE message LIKE 'uc-api.LoadTable duck.managed.id_name_ro%';
 ----
 true
 
+# A read-only attach must NOT backfill — backfill writes to _delta_log/, which a RO attach may not
+# do (it also holds only read-scoped credentials). The read still resolves via log_tail.
+query I
+SELECT count(*) > 0 FROM duckdb_logs()
+WHERE message LIKE 'uc.InternalAttach duck.managed.id_name_ro read-only: skipping backfill%';
+----
+true
+
 # -----------------------------------------------------------------------------
 # Read-only invariant — a _ro table attached READ_ONLY rejects writes.
 #
@@ -96,6 +104,13 @@ SELECT count(*) > 0 FROM duckdb_logs()
 WHERE message LIKE 'uc-api.UpdateTable duck.managed.id_name_rw%';
 ----
 true
+
+# Conversely, a read-write attach never skips backfill (complement of the RO assertion above).
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE message LIKE 'uc.InternalAttach duck.managed.id_name_rw read-only%';
+----
+0
 
 # -----------------------------------------------------------------------------
 # v1 add-commit protocol — assert-table-uuid + set-latest-backfilled-version.

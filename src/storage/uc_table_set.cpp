@@ -158,7 +158,7 @@ static bool CopyStagedCommitToDeltaLog(ClientContext &context, const string &src
 }
 
 int64_t TableInformation::BackfillCommits(ClientContext &context, const vector<UCAPICommit> &commits,
-                                          int64_t backfilled_through) {
+                                          int64_t backfilled_version) {
 	// Operates on a local watermark and does file I/O; the caller writes the returned value back into
 	// commit_state under its lock, so commit_state's lock is never held across these copies.
 	vector<const UCAPICommit *> ordered;
@@ -169,7 +169,7 @@ int64_t TableInformation::BackfillCommits(ClientContext &context, const vector<U
 	std::sort(ordered.begin(), ordered.end(),
 	          [](const UCAPICommit *a, const UCAPICommit *b) { return a->version < b->version; });
 	for (auto *commit : ordered) {
-		if (commit->version <= backfilled_through) {
+		if (commit->version <= backfilled_version) {
 			continue;
 		}
 		string src = table_data->storage_location + "/_delta_log/_staged_commits/" + commit->file_name;
@@ -181,9 +181,9 @@ int64_t TableInformation::BackfillCommits(ClientContext &context, const vector<U
 			if (!CopyStagedCommitToDeltaLog(context, src, dst)) {
 				// false = dst already exists; another session beat us — still update backfill version
 			}
-			backfilled_through = commit->version;
+			backfilled_version = commit->version;
 		} catch (std::exception &e) {
-			// Real failure — stop to avoid advancing backfilled_through past a gap. Surface it: a
+			// Real failure — stop to avoid advancing backfilled_version past a gap. Surface it: a
 			// silently-swallowed backfill failure lets staged commits accumulate until the server
 			// rejects further commits (HTTP 429, "too many un-backfilled commits").
 			UC_LOG_WARNING(context, "uc.BackfillCommits version=%lld src=%s dst=%s failed: %s",
@@ -191,7 +191,7 @@ int64_t TableInformation::BackfillCommits(ClientContext &context, const vector<U
 			break;
 		}
 	}
-	return backfilled_through;
+	return backfilled_version;
 }
 
 void TableInformation::MarkDirty(const lock_guard<mutex> &_attach_lock) {
@@ -259,15 +259,25 @@ void TableInformation::InternalAttach(ClientContext &context) {
 		info.options["parent_catalog"] = Value(catalog.GetName());
 		info.options["parent_catalog_schema"] = Value(schema.name);
 		info.options["parent_commit"] = Value(true);
-		info.options["max_catalog_version"] = Value::BIGINT(commits.latest_table_version);
+		info.options["max_catalog_version"] = Value::BIGINT(commits.ratified_version);
 		// Backfill outside commit_state's lock (file I/O), then publish {etag, watermark} atomically.
-		// Only InternalAttach writes backfilled_through and it is serialized by attach_lock, so the
+		// Only InternalAttach writes backfilled_version and it is serialized by attach_lock, so the
 		// start watermark read here is stable.
-		int64_t start_wm = commit_state.with_locked([](const CommitState &s) { return s.backfilled_through; });
-		int64_t new_wm = BackfillCommits(context, commits.commits, start_wm);
+		//
+		// Backfill is a writer's duty (publishing staged commits into _delta_log/). Skip it on a
+		// read-only attach: a RO attach must not mutate table storage (it also holds only read-scoped
+		// credentials). Reads still see staged commits via the log_tail + max_catalog_version above.
+		bool read_only = uc_catalog.access_mode == AccessMode::READ_ONLY;
+		int64_t start_wm = commit_state.with_locked([](const CommitState &s) { return s.backfilled_version; });
+		if (read_only) {
+			UC_LOG_DEBUG(context,
+			             "uc.InternalAttach %s.%s.%s read-only: skipping backfill (%zu backfillable commit(s))",
+			             table_data->catalog_name, table_data->schema_name, table_data->name, commits.commits.size());
+		}
+		int64_t new_wm = read_only ? start_wm : BackfillCommits(context, commits.commits, start_wm);
 		commit_state.with_locked([&](CommitState &s) {
 			s.etag = commits.etag;
-			s.backfilled_through = new_wm;
+			s.backfilled_version = new_wm;
 		});
 		if (!commits.commits.empty()) {
 			info.options["log_tail"] = BuildLogTailFromCommits(commits, table_data->storage_location);
