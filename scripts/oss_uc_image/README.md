@@ -42,7 +42,7 @@ preconfigured for dev and CI:
 ./uctl list managed
 ./uctl drop managed pets
 
-docker stop duck-uc
+docker stop uc-duck
 ```
 
 ## Image naming
@@ -96,13 +96,13 @@ end-to-end via Delta Kernel (no Spark needed), so both are genuine Delta tables.
 UC records **absolute** `file://` locations for tables. A client can only open
 them if that path resolves in its own filesystem namespace — so `run.sh` bind-mounts
 the data dir at the **same absolute path** on host and container (`-v $DIR:$DIR`)
-and sets `DUCK_UC_DATA_DIR=$DIR`. A host client (e.g. the duckdb `unittest` binary)
+and sets `UC_DUCK_DATA_DIR=$DIR`. A host client (e.g. the duckdb `unittest` binary)
 then resolves `file://$DIR/...` to the same files the container wrote. (Mounting to a
 *different* container path like `/home/unitycatalog/etc/data` breaks host clients:
 UC hands back `/home/unitycatalog/...`, which doesn't exist on the host.)
 
 ```
-$DUCK_UC_DATA_DIR/                    # same path on host and in the container
+$UC_DUCK_DATA_DIR/                    # same path on host and in the container
   duck/
     managed/                          # storage_root of schema duck.managed
       __unitystorage/schemas/<schema-uuid>/tables/<table-uuid>/_delta_log + parquet
@@ -110,13 +110,13 @@ $DUCK_UC_DATA_DIR/                    # same path on host and in the container
       <table>/_delta_log + parquet
 ```
 
-- `duck.managed` has `storage_root = $DUCK_UC_DATA_DIR/duck/managed`, so UC nests its
+- `duck.managed` has `storage_root = $UC_DUCK_DATA_DIR/duck/managed`, so UC nests its
   `__unitystorage` tree (and every managed table) under it.
 - `duck.external` has **no** storage_root; `uctl` gives each external table a location
-  at `$DUCK_UC_DATA_DIR/duck/external/<table>` (read from the container's env). Because
+  at `$UC_DUCK_DATA_DIR/duck/external/<table>` (read from the container's env). Because
   that is a **sibling** of `duck/managed` (neither under nor above managed storage),
   UC's overlap check passes and **no external location needs to be registered**.
-- `DUCK_UC_DATA_DIR` defaults to `/home/unitycatalog/etc/data` (fine for an
+- `UC_DUCK_DATA_DIR` defaults to `/home/unitycatalog/etc/data` (fine for an
   in-container client); `run.sh` overrides it to the identical-path host dir.
 - The H2 metastore lives at `etc/db` (NOT under the data mount), so it is fresh per
   container — see CI usage.
@@ -138,7 +138,7 @@ or drive it yourself:
 tmp=$(mktemp -d)
 ./run "$tmp"
 # ... exercise via ./uctl or the REST API at http://localhost:8080 ...
-docker stop duck-uc        # --rm cleans the container; rm -rf "$tmp" when done
+docker stop uc-duck        # --rm cleans the container; rm -rf "$tmp" when done
 ```
 
 ## Why `Dockerfile.base` (the COURSIER_CACHE fix)
@@ -167,8 +167,8 @@ pieces ride along regardless:
   picked up by Hadoop S3A.
 
 To point the CLI's S3A writer at an S3-compatible store (e.g. MinIO), set at
-`docker run`: **`DUCK_UC_S3_ENDPOINT`** (+ optional `DUCK_UC_S3_REGION`,
-`DUCK_UC_S3_KEY`, `DUCK_UC_S3_SECRET`, `DUCK_UC_S3_SSL`). The entrypoint then writes
+`docker run`: **`UC_DUCK_S3_ENDPOINT`** (+ optional `UC_DUCK_S3_REGION`,
+`UC_DUCK_S3_KEY`, `UC_DUCK_S3_SECRET`, `UC_DUCK_S3_SSL`). The entrypoint then writes
 `core-site.xml`; unset → no file → **AWS default endpoint / local FS** untouched.
 
 Caveats (from the spike — see project notes):
@@ -182,7 +182,7 @@ Caveats (from the spike — see project notes):
 ## Notes / knobs
 
 - Data dir is bind-mounted host==container (`-v $DIR:$DIR`) and the server is told
-  where via `DUCK_UC_DATA_DIR`; `./run <hostdir>` sets both. Pick `<hostdir>` in a
+  where via `UC_DUCK_DATA_DIR`; `./run <hostdir>` sets both. Pick `<hostdir>` in a
   Docker-shareable location (a temp dir under `/var/folders`, `/tmp`, or `/Users`
   works on macOS). Default when unset: `/home/unitycatalog/etc/data` (in-container
   clients only).
@@ -190,7 +190,7 @@ Caveats (from the spike — see project notes):
   reused once built (it is keyed to the checkout's git ref, so a new commit rebuilds).
 - UC source checkout: `UC_REPO=/path` or `--uc-repo /path` (default
   `~/src/d/unitycatalog`).
-- Env overrides: `UC_REPO`, `DUCK_UC_CONTAINER`, `DUCK_UC_PORT`, `FINAL_IMAGE`,
+- Env overrides: `UC_REPO`, `UC_DUCK_CONTAINER`, `UC_DUCK_PORT`, `FINAL_IMAGE`,
   `BASE_IMAGE`, `STABLE_ALIAS`.
 - Baking the catalog/schema into the image at build time (instead of seeding at
   startup) is possible later if startup seeding proves too slow; startup seeding is

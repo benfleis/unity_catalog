@@ -17,11 +17,11 @@ UC_HOME=/home/unitycatalog
 # can only open them if the path resolves in its own filesystem namespace:
 #   - client INSIDE the container: default $UC_HOME/etc/data is fine.
 #   - client on the HOST (e.g. the duckdb unittest binary): run.sh sets
-#     DUCK_UC_DATA_DIR to a path bind-mounted IDENTICALLY on host and container,
+#     UC_DUCK_DATA_DIR to a path bind-mounted IDENTICALLY on host and container,
 #     so an absolute path means the same files on both sides.
 # Under the root: duck/managed/ (MANAGED tables; UC nests __unitystorage here) and
 # duck/external/ (plain EXTERNAL tables). H2 metastore stays at $UC_HOME/etc/db.
-DATA_DIR="${DUCK_UC_DATA_DIR:-$UC_HOME/etc/data}"
+DATA_DIR="${UC_DUCK_DATA_DIR:-$UC_HOME/etc/data}"
 DUCK_DIR="$DATA_DIR/duck"
 MANAGED_ROOT="$DUCK_DIR/managed"
 EXTERNAL_ROOT="$DUCK_DIR/external"
@@ -32,24 +32,24 @@ cd "$UC_HOME"
 mkdir -p "$MANAGED_ROOT" "$EXTERNAL_ROOT"
 
 # 1b. Optional S3-compatible (e.g. MinIO) endpoint for the CLI's Hadoop S3A writer.
-# Only when DUCK_UC_S3_ENDPOINT is set do we write a core-site.xml (the conf dir is
+# Only when UC_DUCK_S3_ENDPOINT is set do we write a core-site.xml (the conf dir is
 # already on the classpath from the image build). Unset => local FS / AWS S3 with
 # the default endpoint. Static keys here cover EXTERNAL tables (no UC vending);
 # MANAGED tables additionally need s3.* vending config in server.properties.
-if [ -n "${DUCK_UC_S3_ENDPOINT:-}" ]; then
+if [ -n "${UC_DUCK_S3_ENDPOINT:-}" ]; then
   cat > "$UC_HOME/conf/core-site.xml" <<EOF
 <?xml version="1.0"?>
 <configuration>
-  <property><name>fs.s3a.endpoint</name><value>${DUCK_UC_S3_ENDPOINT}</value></property>
-  <property><name>fs.s3a.endpoint.region</name><value>${DUCK_UC_S3_REGION:-us-east-1}</value></property>
+  <property><name>fs.s3a.endpoint</name><value>${UC_DUCK_S3_ENDPOINT}</value></property>
+  <property><name>fs.s3a.endpoint.region</name><value>${UC_DUCK_S3_REGION:-us-east-1}</value></property>
   <property><name>fs.s3a.path.style.access</name><value>true</value></property>
-  <property><name>fs.s3a.connection.ssl.enabled</name><value>${DUCK_UC_S3_SSL:-false}</value></property>
-  <property><name>fs.s3a.access.key</name><value>${DUCK_UC_S3_KEY:-}</value></property>
-  <property><name>fs.s3a.secret.key</name><value>${DUCK_UC_S3_SECRET:-}</value></property>
+  <property><name>fs.s3a.connection.ssl.enabled</name><value>${UC_DUCK_S3_SSL:-false}</value></property>
+  <property><name>fs.s3a.access.key</name><value>${UC_DUCK_S3_KEY:-}</value></property>
+  <property><name>fs.s3a.secret.key</name><value>${UC_DUCK_S3_SECRET:-}</value></property>
   <property><name>fs.s3a.aws.credentials.provider</name><value>org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider</value></property>
 </configuration>
 EOF
-  echo "duck-entrypoint: wrote core-site.xml for S3 endpoint $DUCK_UC_S3_ENDPOINT"
+  echo "duck-entrypoint: wrote core-site.xml for S3 endpoint $UC_DUCK_S3_ENDPOINT"
 else
   rm -f "$UC_HOME/conf/core-site.xml"
 fi

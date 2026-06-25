@@ -8,14 +8,14 @@
 #          the container (so UC's absolute file:// table locations resolve for a
 #          HOST client too). Defaults to a fresh temp dir (printed below).
 #
-# Env overrides: DUCK_UC_CONTAINER (default duck-uc), DUCK_UC_PORT (default 8080),
+# Env overrides: UC_DUCK_CONTAINER (default uc-duck), UC_DUCK_PORT (default 8080),
 #                FINAL_IMAGE (default duckdb/unitycatalog:local, the alias build tags).
 set -euo pipefail
 
-CONTAINER="${DUCK_UC_CONTAINER:-duck-uc}"
-PORT="${DUCK_UC_PORT:-8080}"
+CONTAINER="${UC_DUCK_CONTAINER:-uc-duck}"
+PORT="${UC_DUCK_PORT:-8080}"
 IMAGE="${FINAL_IMAGE:-duckdb/unitycatalog:local}"
-HOSTDIR="${1:-$(mktemp -d -t duck-uc-data-XXXXXX)}"
+HOSTDIR="${1:-$(mktemp -d -t uc-duck-data-XXXXXX)}"
 
 # Absolute path required for bind mounts.
 HOSTDIR="$(cd "$HOSTDIR" && pwd)"
@@ -26,7 +26,7 @@ docker run --rm -d \
   --name "$CONTAINER" \
   -p "$PORT:8080" \
   -v "$HOSTDIR:$HOSTDIR" \
-  -e "DUCK_UC_DATA_DIR=$HOSTDIR" \
+  -e "UC_DUCK_DATA_DIR=$HOSTDIR" \
   "$IMAGE" >/dev/null
 
 cat <<EOF

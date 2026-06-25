@@ -21,7 +21,7 @@ RUN set -eux; \
     rm -rf /home/unitycatalog/etc/data/managed /home/unitycatalog/etc/data/external; \
     mkdir -p /home/unitycatalog/etc/data/duck/managed /home/unitycatalog/etc/data/duck/external; \
     # S3-readiness: put a conf dir on the CLI + server classpath so a core-site.xml
-    # the entrypoint generates at runtime (only when DUCK_UC_S3_ENDPOINT is set,
+    # the entrypoint generates at runtime (only when UC_DUCK_S3_ENDPOINT is set,
     # e.g. MinIO) is loaded by Hadoop S3A. Dormant for local FS and AWS S3 (no file
     # written -> default endpoint).
     mkdir -p /home/unitycatalog/conf; \
