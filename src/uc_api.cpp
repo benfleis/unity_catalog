@@ -309,7 +309,8 @@ string UCAPI::UpdateTable(ClientContext &ctx, const string &catalog_name, const 
 	// XXX: hard-coded delta v1 protocol; protocol negotiation via GET /delta/v1/config not yet implemented
 	string url = StringUtil::Format("%s/api/2.1/unity-catalog/delta/v1/catalogs/%s/schemas/%s/tables/%s",
 	                                credentials.endpoint, catalog_name, schema_name, table_name);
-	string backfill_log = backfill_version.IsValid() ? to_string((int64_t)backfill_version.GetIndex()) : string("(none)");
+	string backfill_log =
+	    backfill_version.IsValid() ? to_string((int64_t)backfill_version.GetIndex()) : string("(none)");
 	UC_LOG_DEBUG(ctx, "uc-api.UpdateTable %s.%s.%s version=%lld table_id=%s etag=%s backfill_version=%s", catalog_name,
 	             schema_name, table_name, (int64_t)version, table_id.empty() ? "(none)" : table_id,
 	             etag.empty() ? "(none)" : etag, backfill_log);
