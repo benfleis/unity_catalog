@@ -1,3 +1,4 @@
+#include "duckdb/common/helper.hpp"
 #include <cstddef>
 #include <sys/stat.h>
 
@@ -32,6 +33,19 @@ struct YYJsonDoc {
 	duckdb_yyjson::yyjson_doc *doc;
 };
 
+static string YYJsonEncodeString(const string &raw) {
+	duckdb_yyjson::yyjson_val val;
+	duckdb_yyjson::yyjson_set_strn(&val, raw.data(), raw.size());
+	size_t encoded_len = 0;
+	char *encoded = duckdb_yyjson::yyjson_val_write(&val, duckdb_yyjson::YYJSON_WRITE_NOFLAG, &encoded_len);
+	if (!encoded) {
+		throw InvalidInputException("yyjson string encoding failed");
+	}
+	string result(encoded, encoded_len);
+	free(encoded);
+	return result;
+}
+
 static void AuthenticateViaBearerToken(HTTPHeaders &hdrs, const string &token) {
 	if (!token.empty()) {
 		hdrs.Insert("Authorization", "Bearer " + token);
@@ -60,6 +74,8 @@ static string MakeRequest(ClientContext &ctx, const string &url, const string &t
 
 	HTTPHeaders hdrs(*ctx.db);
 	AuthenticateViaBearerToken(hdrs, token);
+	// TODO: conditional set if not override?
+	hdrs.Insert("Content-Type", "application/json");
 
 	unique_ptr<HTTPResponse> resp;
 	if (body.empty()) {
@@ -72,7 +88,9 @@ static string MakeRequest(ClientContext &ctx, const string &url, const string &t
 	}
 
 	if (!resp->Success()) {
-		throw IOException("Request to '%s' failed: '%s'", url, resp->GetError());
+		throw IOException("Request to '%s' failed (HTTP %d): %s\nResponse body: %s", url,
+		                  static_cast<int>(resp->status), resp->GetError(),
+		                  resp->body.empty() ? "(empty)" : resp->body);
 	}
 	return std::move(resp->body);
 }
@@ -81,12 +99,18 @@ template <class TYPE, uint8_t TYPE_NUM, TYPE (*get_function)(duckdb_yyjson::yyjs
 static TYPE TemplatedTryGetYYJson(duckdb_yyjson::yyjson_val *obj, const string &field, TYPE default_val,
                                   bool fail_on_missing = true) {
 	auto val = yyjson_obj_get(obj, field.c_str());
-	if (val && yyjson_get_type(val) == TYPE_NUM) {
-		return get_function(val);
-	} else if (!fail_on_missing) {
-		return default_val;
+	if (val && !yyjson_is_null(val)) {
+		if (yyjson_get_type(val) == TYPE_NUM) {
+			return get_function(val);
+		}
+		throw IOException("Invalid field found while parsing field: " + field);
 	}
-	throw IOException("Invalid field found while parsing field: " + field);
+	// field absent or JSON null: both are "missing" for a required field. The spec declares no
+	// response property nullable, so a null in a required field is a non-conforming response.
+	if (fail_on_missing) {
+		throw IOException("Invalid field found while parsing field: " + field);
+	}
+	return default_val;
 }
 
 static uint64_t TryGetNumFromObject(duckdb_yyjson::yyjson_val *obj, const string &field, bool fail_on_missing = true,
@@ -133,6 +157,16 @@ private:
 } // namespace
 
 static UCAPIError CheckError(duckdb_yyjson::yyjson_val *api_result) {
+	// delta.yaml v1 format: {"error": {"message": "...", "type": "CommitVersionConflictException", "code": N}}
+	auto *error_obj = yyjson_obj_get(api_result, "error");
+	if (error_obj && yyjson_is_obj(error_obj)) {
+		auto message = TryGetStrFromObject(error_obj, "message", false);
+		if (!message.empty()) {
+			auto type = TryGetStrFromObject(error_obj, "type", false);
+			return UCAPIError(type.empty() ? "error" : type, message);
+		}
+	}
+	// all.yaml legacy format: {"error_code": "...", "message": "..."}
 	auto error_code = TryGetStrFromObject(api_result, "error_code", false);
 	if (!error_code.empty()) {
 		auto message = TryGetStrFromObject(api_result, "message", false);
@@ -142,29 +176,6 @@ static UCAPIError CheckError(duckdb_yyjson::yyjson_val *api_result) {
 		return UCAPIError(error_code, message);
 	}
 	return UCAPIError();
-}
-
-static string GetCredentialsRequest(ClientContext &ctx, const string &url, const string &table_id, bool write = false,
-                                    const string &token = "") {
-	auto db = ctx.db;
-	auto &http_util = HTTPUtil::Get(*db);
-	auto params = http_util.InitializeParameters(*db, url);
-
-	string access_type = write ? "READ_WRITE" : "READ";
-	string body = StringUtil::Format(R"({"table_id" : "%s", "operation" : "%s"})", table_id, access_type);
-	HTTPHeaders hdrs(*db);
-	hdrs.Insert("Content-Type", "application/json");
-	AuthenticateViaBearerToken(hdrs, token);
-
-	params->logger = ctx.logger;
-	PostRequestInfo req(url, hdrs, *params, reinterpret_cast<const_data_ptr_t>(body.c_str()), body.length());
-	auto resp = http_util.Request(req);
-
-	if (!resp->Success()) {
-		throw IOException("POST Request to '%s' failed: '%s'", url, resp->GetError());
-	}
-	// Ugh. actual response body not in resp->body, but in req.buffer_out
-	return std::move(req.buffer_out);
 }
 
 // # list catalogs
@@ -209,59 +220,100 @@ string UCAPI::GetDefaultSchema(ClientContext &ctx, const UCCredentials &credenti
 	return setting_name;
 }
 
-UCAPICommitsResult UCAPI::GetCommits(ClientContext &ctx, const string &table_id, const string &table_uri,
-                                     const UCCredentials &credentials) {
+UCAPICommitsResult UCAPI::LoadTable(ClientContext &ctx, const string &catalog_name, const string &schema_name,
+                                    const string &table_name, const UCCredentials &credentials) {
 	UCAPICommitsResult result;
-	UC_LOG_DEBUG(ctx, "uc-api.GetCommits table_id=%s", table_id);
-	string body = StringUtil::Format("{\"start_version\": 0, \"table_id\": \"%s\", \"table_uri\": \"%s\"}",
-	                                 table_id.c_str(), table_uri.c_str());
-	string url = credentials.endpoint + "/api/2.1/unity-catalog/delta/preview/commits";
-	auto api_result = MakeRequest(ctx, url, credentials.token, body, true);
+	string url = StringUtil::Format("%s/api/2.1/unity-catalog/delta/v1/catalogs/%s/schemas/%s/tables/%s",
+	                                credentials.endpoint, catalog_name, schema_name, table_name);
+	UC_LOG_DEBUG(ctx, "uc-api.LoadTable %s.%s.%s", catalog_name, schema_name, table_name);
+	auto api_result = MakeRequest(ctx, url, credentials.token);
 
 	YYJsonDoc doc(api_result);
 	auto *root = doc.Root();
 
 	auto error = CheckError(root);
 	if (error.HasError()) {
-		error.ThrowError(StringUtil::Format("Failed to get commits for %s", table_id));
+		error.ThrowError(StringUtil::Format("Failed to load table %s.%s.%s", catalog_name, schema_name, table_name));
 	}
 
-	result.latest_table_version = TryGetNumFromObject(root, "latest_table_version", true);
+	auto *metadata = yyjson_obj_get(root, "metadata");
+	if (metadata && yyjson_is_obj(metadata)) {
+		result.etag = TryGetStrFromObject(metadata, "etag", false);
+	}
 
+	// `latest-table-version` is optional per spec but gates which staged commits are visible
+	// (max_catalog_version), so a default of 0 would hide them all. Fall back to the highest
+	// commit version: when present it equals that anyway (it's the latest ratified version).
+	auto *ltv = yyjson_obj_get(root, "latest-table-version");
+	bool ltv_present = ltv && !yyjson_is_null(ltv);
+	idx_t server_ltv = TryGetNumFromObject(root, "latest-table-version", false, 0);
+
+	idx_t max_commit_version = 0;
 	auto *commits = yyjson_obj_get(root, "commits");
-	size_t idx, max;
-	duckdb_yyjson::yyjson_val *commit;
-	yyjson_arr_foreach(commits, idx, max, commit) {
-		UCAPICommit commit_result;
-		commit_result.version = TryGetNumFromObject(commit, "version", true);
-		commit_result.timestamp = TryGetNumFromObject(commit, "timestamp", true);
-		commit_result.file_name = TryGetStrFromObject(commit, "file_name", true);
-		commit_result.file_size = TryGetNumFromObject(commit, "file_size", true);
-		commit_result.file_modification_timestamp = TryGetNumFromObject(commit, "file_modification_timestamp", true);
-		result.commits.push_back(commit_result);
+	if (commits && yyjson_is_arr(commits)) {
+		size_t idx, max;
+		duckdb_yyjson::yyjson_val *commit;
+		yyjson_arr_foreach(commits, idx, max, commit) {
+			UCAPICommit c;
+			c.version = TryGetNumFromObject(commit, "version", true);
+			c.timestamp = (int64_t)TryGetNumFromObject(commit, "timestamp", true);
+			c.file_name = TryGetStrFromObject(commit, "file-name", true);
+			c.file_size = (int64_t)TryGetNumFromObject(commit, "file-size", true);
+			c.file_modification_timestamp = (int64_t)TryGetNumFromObject(commit, "file-modification-timestamp", true);
+			if (c.version > max_commit_version) {
+				max_commit_version = c.version;
+			}
+			result.commits.push_back(c);
+		}
 	}
 
-	UC_LOG_DEBUG(ctx, "uc-api.GetCommits table_id=%s -> commits=%zu latest_version=%lld", table_id,
-	             result.commits.size(), (long long)result.latest_table_version);
+	// In case server ltv exceeds max commit, take server's value. Shouldn't occur, check below!
+	result.ratified_version = server_ltv > max_commit_version ? server_ltv : max_commit_version;
+
+	// Invariant: when the server reports a latest version alongside backfillable commits, it must
+	// equal the highest commit; the check is exempt if ltv is absent or there are no commits.
+	// DEBUG asserts here; (consider always failing?). Release recovers via max() above; only
+	// the absent-with-commits case is logged below — a present-but-unequal ltv is not.
+	D_ASSERT(server_ltv == max_commit_version || !ltv_present || result.commits.empty());
+	if (!ltv_present && !result.commits.empty()) {
+		UC_LOG_WARNING(ctx,
+		               "uc-api.LoadTable %s.%s.%s -> incoherent response: %zu commit(s) but no "
+		               "latest-table-version; using max commit version %lld as max_catalog_version",
+		               catalog_name, schema_name, table_name, result.commits.size(), (int64_t)result.ratified_version);
+	}
+
+	UC_LOG_DEBUG(ctx, "uc-api.LoadTable %s.%s.%s -> etag=%s commits=%zu ratified_version=%lld", catalog_name,
+	             schema_name, table_name, result.etag.empty() ? "(none)" : result.etag, result.commits.size(),
+	             (int64_t)result.ratified_version);
 	return result;
 }
 
-bool UCAPI::PostCommit(ClientContext &ctx, const string &table_id, const string &table_uri,
-                       const UCCredentials &credentials, idx_t version, idx_t timestamp, const string &file_name,
-                       idx_t file_size, idx_t file_modification_timestamp, int64_t latest_backfilled_version) {
-	string backfill_field;
-	string backfill_log("(none)");
-	if (latest_backfilled_version >= 0) {
-		backfill_field = StringUtil::Format(R"("latest_backfilled_version": %lld,)", latest_backfilled_version);
-		backfill_log = to_string((int64_t)latest_backfilled_version);
+string UCAPI::UpdateTable(ClientContext &ctx, const string &catalog_name, const string &schema_name,
+                          const string &table_name, const string &table_id, const string &etag,
+                          const UCCredentials &credentials, idx_t version, idx_t timestamp, const string &file_name,
+                          idx_t file_size, idx_t file_modification_timestamp, optional_idx backfill_version) {
+	string uuid_req = StringUtil::Format(R"({"type": "assert-table-uuid", "uuid": "%s"})", table_id);
+	// YYJsonEncodeString returns a JSON string token w/ quotes, so no quotes in format below
+	string etag_req =
+	    etag.empty() ? "" : StringUtil::Format(R"(, {"type": "assert-etag", "etag": %s})", YYJsonEncodeString(etag));
+	string backfill_update;
+	if (backfill_version.IsValid()) {
+		backfill_update =
+		    StringUtil::Format(R"(, {"action": "set-latest-backfilled-version", "latest-published-version": %lld})",
+		                       (int64_t)backfill_version.GetIndex());
 	}
-	UC_LOG_DEBUG(ctx, "uc-api.PostCommit table_id=%s version=%lld backfill_version=%s", table_id, (long long)version,
-	             backfill_log);
 	string body = StringUtil::Format(
-	    R"({"table_id": "%s", "table_uri": "%s/", %s "commit_info": {"version": %ld, "timestamp": %ld, "file_name": "%s", "file_size": %ld, "file_modification_timestamp": %ld}})",
-	    table_id.c_str(), table_uri.c_str(), backfill_field.c_str(), version, timestamp, file_name.c_str(), file_size,
-	    file_modification_timestamp);
-	string url = credentials.endpoint + "/api/2.1/unity-catalog/delta/preview/commits";
+	    R"({"requirements": [%s%s], "updates": [{"action": "add-commit", "commit": {"version": %lld, "timestamp": %lld, "file-name": "%s", "file-size": %lld, "file-modification-timestamp": %lld}}%s]})",
+	    uuid_req, etag_req, (int64_t)version, (int64_t)timestamp, file_name, (int64_t)file_size,
+	    (int64_t)file_modification_timestamp, backfill_update);
+	// XXX: hard-coded delta v1 protocol; protocol negotiation via GET /delta/v1/config not yet implemented
+	string url = StringUtil::Format("%s/api/2.1/unity-catalog/delta/v1/catalogs/%s/schemas/%s/tables/%s",
+	                                credentials.endpoint, catalog_name, schema_name, table_name);
+	string backfill_log =
+	    backfill_version.IsValid() ? to_string((int64_t)backfill_version.GetIndex()) : string("(none)");
+	UC_LOG_DEBUG(ctx, "uc-api.UpdateTable %s.%s.%s version=%lld table_id=%s etag=%s backfill_version=%s", catalog_name,
+	             schema_name, table_name, (int64_t)version, table_id.empty() ? "(none)" : table_id,
+	             etag.empty() ? "(none)" : etag, backfill_log);
 	auto api_result = MakeRequest(ctx, url, credentials.token, body);
 
 	YYJsonDoc doc(api_result);
@@ -269,34 +321,78 @@ bool UCAPI::PostCommit(ClientContext &ctx, const string &table_id, const string 
 
 	auto error = CheckError(root);
 	if (error.HasError()) {
-		error.ThrowError(StringUtil::Format("Failed to commit to %s", table_id));
+		error.ThrowError(StringUtil::Format("Failed to commit to %s.%s.%s", catalog_name, schema_name, table_name));
 	}
 
-	UC_LOG_DEBUG(ctx, "uc-api.PostCommit table_id=%s version=%lld -> ok", table_id, (long long)version);
-	return true;
+	string new_etag;
+	auto *metadata = yyjson_obj_get(root, "metadata");
+	if (metadata && yyjson_is_obj(metadata)) {
+		new_etag = TryGetStrFromObject(metadata, "etag", false);
+	}
+	UC_LOG_DEBUG(ctx, "uc-api.UpdateTable %s.%s.%s -> new_etag=%s", catalog_name, schema_name, table_name,
+	             new_etag.empty() ? "(none)" : new_etag);
+	return new_etag;
 }
 
-UCAPITableCredentials UCAPI::GetTableCredentials(ClientContext &ctx, const string &table_id, bool write,
+UCAPITableCredentials UCAPI::GetTableCredentials(ClientContext &ctx, const string &catalog_name,
+                                                 const string &schema_name, const string &table_name,
+                                                 const string &table_id, bool catalog_managed, bool write,
                                                  const UCCredentials &credentials) {
 	UCAPITableCredentials result;
-	UC_LOG_DEBUG(ctx, "uc-api.GetTableCredentials table_id=%s op=%s", table_id, write ? "READ_WRITE" : "READ");
+	const char *operation = write ? "READ_WRITE" : "READ";
 
-	auto url = credentials.endpoint + "/api/2.1/unity-catalog/temporary-table-credentials";
-	auto api_result = GetCredentialsRequest(ctx, url, table_id, write, credentials.token);
+	if (!catalog_managed) {
+		// EXTERNAL / plain Delta: the /delta/v1 credentials endpoint rejects these (HTTP 400, 5116).
+		// Use the temporary-table-credentials endpoint, keyed by table_id.
+		string url = credentials.endpoint + "/api/2.1/unity-catalog/temporary-table-credentials";
+		string body = StringUtil::Format(R"({"table_id": "%s", "operation": "%s"})", table_id, operation);
+		UC_LOG_DEBUG(ctx, "uc-api.GetTableCredentials %s.%s.%s op=%s managed=0 table_id=%s", catalog_name, schema_name,
+		             table_name, operation, table_id);
+		auto api_result = MakeRequest(ctx, url, credentials.token, body);
+
+		YYJsonDoc doc(api_result);
+		auto *root = doc.Root();
+		auto error = CheckError(root);
+		if (error.HasError()) {
+			error.ThrowError(StringUtil::Format("Failed to get table credentials for %s.%s.%s", catalog_name,
+			                                    schema_name, table_name));
+		}
+		auto *aws = yyjson_obj_get(root, "aws_temp_credentials");
+		if (aws && yyjson_is_obj(aws)) {
+			result.key_id = TryGetStrFromObject(aws, "access_key_id", false);
+			result.secret = TryGetStrFromObject(aws, "secret_access_key", false);
+			result.session_token = TryGetStrFromObject(aws, "session_token", false);
+		}
+		return result;
+	}
+
+	// Managed (catalog-managed) Delta: delta.yaml v1 credentials endpoint.
+	string url = StringUtil::Format(
+	    "%s/api/2.1/unity-catalog/delta/v1/catalogs/%s/schemas/%s/tables/%s/credentials?operation=%s",
+	    credentials.endpoint, catalog_name, schema_name, table_name, operation);
+	UC_LOG_DEBUG(ctx, "uc-api.GetTableCredentials %s.%s.%s op=%s managed=1", catalog_name, schema_name, table_name,
+	             operation);
+	auto api_result = MakeRequest(ctx, url, credentials.token);
 
 	YYJsonDoc doc(api_result);
 	auto *root = doc.Root();
 
 	auto error = CheckError(root);
 	if (error.HasError()) {
-		error.ThrowError(StringUtil::Format("Failed to get table credentials for table_id: %s", table_id));
+		error.ThrowError(
+		    StringUtil::Format("Failed to get table credentials for %s.%s.%s", catalog_name, schema_name, table_name));
 	}
 
-	auto *aws_temp_credentials = yyjson_obj_get(root, "aws_temp_credentials");
-	if (aws_temp_credentials) {
-		result.key_id = TryGetStrFromObject(aws_temp_credentials, "access_key_id");
-		result.secret = TryGetStrFromObject(aws_temp_credentials, "secret_access_key");
-		result.session_token = TryGetStrFromObject(aws_temp_credentials, "session_token");
+	// Parse storage-credentials array; use first entry (longest-prefix matching is a TODO)
+	auto *creds_arr = yyjson_obj_get(root, "storage-credentials");
+	if (creds_arr && yyjson_is_arr(creds_arr) && yyjson_arr_size(creds_arr) > 0) {
+		auto *cred = yyjson_arr_get_first(creds_arr);
+		auto *cfg = yyjson_obj_get(cred, "config");
+		if (cfg && yyjson_is_obj(cfg)) {
+			result.key_id = TryGetStrFromObject(cfg, "s3.access-key-id", false);
+			result.secret = TryGetStrFromObject(cfg, "s3.secret-access-key", false);
+			result.session_token = TryGetStrFromObject(cfg, "s3.session-token", false);
+		}
 	}
 
 	return result;

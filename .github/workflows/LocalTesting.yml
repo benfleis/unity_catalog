@@ -1,5 +1,5 @@
 name: Local functional tests
-on: [push, pull_request,repository_dispatch]
+on: [push, pull_request, repository_dispatch]
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
   cancel-in-progress: true
@@ -15,11 +15,12 @@ jobs:
     name: Local OSS Unity Catalog tests (Linux)
     runs-on: ubuntu-latest
     env:
-      VCPKG_TARGET_TRIPLET: 'x64-linux'
+      VCPKG_TARGET_TRIPLET: x64-linux
       GEN: ninja
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
       USE_MERGED_VCPKG_MANIFEST: 1
       UC_TEST_SERVER_RUNNING: 1
+      UC_TEST_DATA: "${{ github.workspace }}/unitycatalog/etc/data"
       BUILD_EXTENSION_TEST_DEPS: full
 
     steps:
@@ -50,11 +51,16 @@ jobs:
 
     - uses: actions/setup-node@v4
 
+    - uses: actions/checkout@v4
+      with:
+        repository: unitycatalog/unitycatalog
+        ref: v0.5.0
+        path: unitycatalog
+
     - name: Setup Unity Catalog test server
       run: |
         sudo apt install openjdk-17-jre-headless
-        git clone https://github.com/unitycatalog/unitycatalog.git
-        cd unitycatalog 
+        cd unitycatalog
         build/sbt package
         bin/start-uc-server | tee uc.log &
         sleep 15 # should be quite fast, capture initial output in GH logs
@@ -64,6 +70,11 @@ jobs:
     - name: Build extension
       run: |
         make release
+
+    # Seed the `duck` test catalog; requires duckdb CLI from release build above
+    - name: Seed duck test catalog
+      run: |
+        UC_REPO="$GITHUB_WORKSPACE/unitycatalog" scripts/oss_uc_local/seed_tables
 
     - name: Test extension
       run: |
