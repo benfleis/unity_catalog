@@ -1,9 +1,6 @@
 # name: test/sql/oss_local/write.test
-# description: test uc_catalog writes against the OSS UC "duck" image (catalog-managed table)
+# description: catalog-managed writes against the OSS UC ducklabs image via the UC/UC_CATALOG alias. Paired write.py declares the server (uc_server fixture) and seeds duck.managed.id_name.
 # group: [oss_local]
-
-# Run write.py first to seed an empty CMT table duck.managed.id_name in the
-# running duck image (and `write.py teardown` to drop it after). See that file.
 
 # Require statement will ensure this test is run with this extension loaded
 require parquet
@@ -13,8 +10,6 @@ require unity_catalog
 require delta
 
 require httpfs
-
-require-env UC_TEST_SERVER_RUNNING
 
 statement ok
 CREATE SECRET (

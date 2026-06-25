@@ -1,8 +1,8 @@
-"""Driver for write.test (same-stem pairing -> one test).
+"""Driver for attach.test (same-stem pairing -> one test).
 
-Declares the running OSS UC server via the `uc_server` fixture and seeds an empty
-catalog-managed duck.managed.id_name for the body to INSERT into. Mirrors
-catalog_managed.py but the body exercises the `UC` / `UC_CATALOG` type alias.
+Declares the running OSS UC server via the `uc_server` fixture (oss_local/conftest.py)
+and seeds an empty catalog-managed duck.managed.id_name; the body exercises
+attach/detach/USE semantics and writes+reads a row through it.
 """
 
 from driver import run_paired, step
@@ -14,7 +14,7 @@ TABLE = "id_name"
 COLUMNS = "id INT, name STRING"
 
 
-def test_write(request, uc_server):
+def test_attach(request, uc_server):
     with step(f"ensuring seed table duck.{SCHEMA}.{TABLE}"):
         uctl("drop", SCHEMA, TABLE, check=False)  # idempotent clean slate
         uctl("create", SCHEMA, TABLE, COLUMNS)
