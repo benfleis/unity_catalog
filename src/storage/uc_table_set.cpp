@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include "uc_api.hpp"
 #include "uc_logging.hpp"
 #include "uc_utils.hpp"
@@ -79,6 +81,9 @@ optional_ptr<CatalogEntry> TableInformation::GetVersion(ClientContext &context, 
 };
 
 optional_ptr<Catalog> TableInformation::GetInternalCatalog() {
+	// TODO(race): unsynchronized read of internal_attached_database — a concurrent InternalDetach
+	// (under attach_lock) can null it, risking a null/dangling deref. Needs locking or a guarantee
+	// the caller holds attach_lock / has a live attach.
 	return internal_attached_database->GetCatalog();
 }
 
@@ -90,7 +95,8 @@ void TableInformation::RefreshCredentials(ClientContext &context) {
 	auto &secret_manager = SecretManager::Get(context);
 	// Get Credentials from UCAPI
 	auto table_credentials = UCAPI::GetTableCredentials(
-	    context, table_data->table_id, !(catalog.access_mode == AccessMode::READ_ONLY), catalog.credentials);
+	    context, table_data->catalog_name, table_data->schema_name, table_data->name, table_data->table_id,
+	    IsCatalogManaged(), !(catalog.access_mode == AccessMode::READ_ONLY), catalog.credentials);
 
 	// Inject secret into secret manager scoped to this path
 	CreateSecretInput input;
@@ -151,17 +157,20 @@ static bool CopyStagedCommitToDeltaLog(ClientContext &context, const string &src
 	}
 }
 
-void TableInformation::AddPendingBackfill(idx_t version, const string &staged_file_name) {
-	lock_guard<mutex> l(attach_lock);
-	UCAPICommit entry;
-	entry.version = (int64_t)version;
-	entry.file_name = staged_file_name;
-	backfills_pending.push_back(std::move(entry));
-}
-
-void TableInformation::BackfillCommitList(ClientContext &context, const vector<UCAPICommit> &commits) {
-	for (auto &commit : commits) {
-		if (commit.version <= backfilled_through) {
+optional_idx TableInformation::BackfillCommits(ClientContext &context, const vector<UCAPICommit> &commits,
+                                               optional_idx backfilled_version) {
+	// Operates on a local watermark and does file I/O; the caller writes the returned value back into
+	// commit_state under its lock, so commit_state's lock is never held across these copies.
+	vector<reference<const UCAPICommit>> ordered;
+	ordered.reserve(commits.size());
+	for (auto &c : commits) {
+		ordered.push_back(c);
+	}
+	std::sort(ordered.begin(), ordered.end(),
+	          [](const UCAPICommit &a, const UCAPICommit &b) { return a.version < b.version; });
+	for (auto commit_ref : ordered) {
+		auto const &commit = commit_ref.get();
+		if (backfilled_version.IsValid() && commit.version <= backfilled_version.GetIndex()) {
 			continue;
 		}
 		string src = table_data->storage_location + "/_delta_log/_staged_commits/" + commit.file_name;
@@ -173,37 +182,30 @@ void TableInformation::BackfillCommitList(ClientContext &context, const vector<U
 			if (!CopyStagedCommitToDeltaLog(context, src, dst)) {
 				// false = dst already exists; another session beat us — still update backfill version
 			}
-			backfilled_through = commit.version;
+			backfilled_version = commit.version;
 		} catch (std::exception &e) {
-			// Real failure — stop to avoid advancing backfilled_through past a gap. Surface it: a
+			// Real failure — stop to avoid advancing backfilled_version past a gap. Surface it: a
 			// silently-swallowed backfill failure lets staged commits accumulate until the server
 			// rejects further commits (HTTP 429, "too many un-backfilled commits").
-			UC_LOG_WARNING(context, "uc.BackfillCommitList version=%lld src=%s dst=%s failed: %s",
-			               (long long)commit.version, src.c_str(), dst.c_str(), e.what());
+			UC_LOG_WARNING(context, "uc.BackfillCommits version=%lld src=%s dst=%s failed: %s", (int64_t)commit.version,
+			               src.c_str(), dst.c_str(), e.what());
 			break;
 		}
 	}
+	return backfilled_version;
 }
 
-void TableInformation::FlushPendingBackfills(ClientContext &context, const lock_guard<mutex> &) {
-	// Dequeue atomically; not retried — GetCommits path in InternalAttach is the fallback.
-	auto to_flush = std::move(backfills_pending);
-	BackfillCommitList(context, to_flush);
-}
-
-void TableInformation::MarkDirty() {
-	lock_guard<mutex> l(attach_lock);
+void TableInformation::MarkDirty(const lock_guard<mutex> &_attach_lock) {
 	is_dirty = true;
 }
 
-bool TableInformation::IsCCV2() const {
-	// Check for the preview setting
+bool TableInformation::IsCatalogManaged() const {
+	// Databricks preview property (pre-GA)
 	auto it = table_data->properties.find("delta.feature.catalogOwned-preview");
 	if (it != table_data->properties.end() && it->second == "supported") {
 		return true;
 	}
-
-	// Check for the GA setting
+	// Databricks GA + OSS UC v0.5+: set for tables that use the Delta CMT protocol
 	it = table_data->properties.find("delta.feature.catalogManaged");
 	return it != table_data->properties.end() && it->second == "supported";
 }
@@ -212,7 +214,7 @@ static Value BuildLogTailFromCommits(const UCAPICommitsResult &commits, const st
 	vector<Value> commit_values;
 	for (const auto &commit : commits.commits) {
 		child_list_t<Value> commit_struct;
-		commit_struct.push_back(make_pair("version", Value::BIGINT(commit.version)));
+		commit_struct.push_back(make_pair("version", Value::BIGINT((int64_t)commit.version)));
 		commit_struct.push_back(make_pair("timestamp", Value::BIGINT(commit.timestamp)));
 		commit_struct.push_back(
 		    make_pair("file_name", Value(storage_location + "/_delta_log/_staged_commits/" + commit.file_name)));
@@ -236,8 +238,6 @@ void TableInformation::InternalAttach(ClientContext &context) {
 		is_dirty = false;
 	}
 
-	FlushPendingBackfills(context, l);
-
 	if (internal_attached_database) {
 		return;
 	}
@@ -253,15 +253,33 @@ void TableInformation::InternalAttach(ClientContext &context) {
 	                {"unity_table_id", Value(table_data->table_id)}};
 	info.path = table_data->storage_location;
 
-	if (IsCCV2()) {
+	if (IsCatalogManaged()) {
 		auto &uc_catalog = catalog.Cast<UnityCatalog>();
-		auto commits =
-		    UCAPI::GetCommits(context, table_data->table_id, table_data->storage_location, uc_catalog.credentials);
+		auto commits = UCAPI::LoadTable(context, table_data->catalog_name, table_data->schema_name, table_data->name,
+		                                uc_catalog.credentials);
 		info.options["parent_catalog"] = Value(catalog.GetName());
 		info.options["parent_catalog_schema"] = Value(schema.name);
 		info.options["parent_commit"] = Value(true);
-		info.options["max_catalog_version"] = Value::BIGINT(commits.latest_table_version);
-		BackfillCommitList(context, commits.commits);
+		info.options["max_catalog_version"] = Value::BIGINT((int64_t)commits.ratified_version);
+		// Backfill outside commit_state's lock (file I/O), then publish {etag, watermark} atomically.
+		// Only InternalAttach writes backfilled_version and it is serialized by attach_lock, so the
+		// start watermark read here is stable.
+		//
+		// Backfill is a writer's duty (publishing staged commits into _delta_log/). Skip it on a
+		// read-only attach: a RO attach must not mutate table storage (it also holds only read-scoped
+		// credentials). Reads still see staged commits via the log_tail + max_catalog_version above.
+		bool read_only = uc_catalog.access_mode == AccessMode::READ_ONLY;
+		optional_idx start_wm = commit_state.with_locked([](const CommitState &s) { return s.backfilled_version; });
+		if (read_only) {
+			UC_LOG_DEBUG(context,
+			             "uc.InternalAttach %s.%s.%s read-only: skipping backfill (%zu backfillable commit(s))",
+			             table_data->catalog_name, table_data->schema_name, table_data->name, commits.commits.size());
+		}
+		optional_idx new_wm = read_only ? start_wm : BackfillCommits(context, commits.commits, start_wm);
+		commit_state.with_locked([&](CommitState &s) {
+			s.etag = commits.etag;
+			s.backfilled_version = new_wm;
+		});
 		if (!commits.commits.empty()) {
 			info.options["log_tail"] = BuildLogTailFromCommits(commits, table_data->storage_location);
 		}
@@ -288,6 +306,9 @@ void TableInformation::InternalCheckpoint(ClientContext &context, bool force) {
 	D_ASSERT(table_data);
 	RefreshCredentials(context);
 	InternalAttach(context);
+	// TODO(race): unsynchronized read of internal_attached_database (same hazard as
+	// GetInternalCatalog). InternalAttach above released attach_lock, so another thread could detach
+	// before this deref.
 	internal_attached_database->GetTransactionManager().Checkpoint(context, force);
 }
 
