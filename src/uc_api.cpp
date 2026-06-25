@@ -223,7 +223,6 @@ string UCAPI::GetDefaultSchema(ClientContext &ctx, const UCCredentials &credenti
 UCAPICommitsResult UCAPI::LoadTable(ClientContext &ctx, const string &catalog_name, const string &schema_name,
                                     const string &table_name, const UCCredentials &credentials) {
 	UCAPICommitsResult result;
-	// XXX: hard-coded delta v1 protocol; protocol negotiation via GET /delta/v1/config not yet implemented
 	string url = StringUtil::Format("%s/api/2.1/unity-catalog/delta/v1/catalogs/%s/schemas/%s/tables/%s",
 	                                credentials.endpoint, catalog_name, schema_name, table_name);
 	UC_LOG_DEBUG(ctx, "uc-api.LoadTable %s.%s.%s", catalog_name, schema_name, table_name);
