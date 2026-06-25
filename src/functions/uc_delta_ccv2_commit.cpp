@@ -38,23 +38,28 @@ void UCDeltaCCV2CommitExecute(ClientContext &context, TableFunctionInput &data_p
 	auto table_entry = reinterpret_cast<UCTableEntry *>(res[4].GetPointer());
 	idx_t file_modification_timestamp = res[5].GetValue<idx_t>();
 
-	string table_id = table_entry->table.table_data->table_id;
-	string table_location = table_entry->table.table_data->storage_location;
-
 	UCCredentials &credentials = table_entry->table.catalog.Cast<UnityCatalog>().credentials;
+	auto &td = *table_entry->table.table_data;
 
 	// Get relative path
 	string commit_file_name = commit_file_path.substr(commit_file_path.find_last_of("/\\") + 1);
 
-	// Queue backfill for next InternalAttach — S3 credential lookup requires a catalog transaction
-	// which is unavailable here (CommitCallback fires after MetaTransaction::Commit closes it).
-	table_entry->table.AddPendingBackfill(version, commit_file_name);
+	// One consistent snapshot: etag (assert-etag token) and backfilled_version must be paired from
+	// the same locked read, else a concurrent re-attach could tear them. Copy out via with_locked so
+	// the lock is NOT held across the UpdateTable HTTP call below.
+	auto &table = table_entry->table;
+	CommitState cs = table.commit_state.with_locked([](const CommitState &s) { return s; });
+	string new_etag = UCAPI::UpdateTable(context, td.catalog_name, td.schema_name, td.name, td.table_id, cs.etag,
+	                                     credentials, version, commit_timestamp, commit_file_name, commit_file_size,
+	                                     file_modification_timestamp, cs.backfilled_version);
 
-	UCAPI::PostCommit(context, table_id, table_location, credentials, version, commit_timestamp, commit_file_name,
-	                  commit_file_size, file_modification_timestamp, table_entry->table.backfilled_through);
-
-	// Mark dirty after a successful commit so the next read re-attaches with a fresh log tail
-	table_entry->table.MarkDirty();
+	// Mark dirty so the next read re-attaches with a fresh log tail; cache the new etag for the next
+	// commit's assert-etag. (is_dirty under attach_lock; etag under commit_state's own lock.)
+	{
+		lock_guard<mutex> l(table.attach_lock);
+		table.MarkDirty(l);
+	}
+	table.commit_state.with_locked([&](CommitState &s) { s.etag = new_etag; });
 
 	output.SetCardinality(1);
 	output.SetValue(1, 0, Value::BOOLEAN(true));
