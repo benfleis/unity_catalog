@@ -10,6 +10,7 @@
 
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/common/optional_idx.hpp"
 
 namespace duckdb {
 struct UCCredentials;
@@ -51,7 +52,7 @@ struct UCAPITableCredentials {
 };
 
 struct UCAPICommit {
-	int64_t version;
+	idx_t version;
 	int64_t timestamp;
 	string file_name;
 	int64_t file_size;
@@ -61,7 +62,7 @@ struct UCAPICommit {
 struct UCAPICommitsResult {
 	vector<UCAPICommit> commits;
 	// Newest version the catalog has assigned (may not yet be backfilled into _delta_log/).
-	int64_t ratified_version = 0; // JSON: latest-table-version
+	idx_t ratified_version = 0; // JSON: latest-table-version
 	string etag;
 };
 
@@ -87,12 +88,13 @@ public:
 	// delta.yaml v1: POST /delta/v1/catalogs/{catalog}/schemas/{schema}/tables/{table}
 	// Sends add-commit update with optional assert-etag requirement.
 	// Returns the new etag from the response (empty if absent).
-	// backfill_version: when != idx_t(-1), appends a set-latest-backfilled-version update in the
-	// same POST so readers can find the commit in _delta_log/ without hitting UC's staging path.
+	// backfill_version: when valid, appends a set-latest-backfilled-version update in the same POST
+	// so readers can find the commit in _delta_log/ without hitting UC's staging path.
 	static string UpdateTable(ClientContext &ctx, const string &catalog_name, const string &schema_name,
 	                          const string &table_name, const string &table_id, const string &etag,
 	                          const UCCredentials &credentials, idx_t version, idx_t timestamp, const string &file_name,
-	                          idx_t file_size, idx_t file_modification_timestamp, idx_t backfill_version = idx_t(-1));
+	                          idx_t file_size, idx_t file_modification_timestamp,
+	                          optional_idx backfill_version = optional_idx());
 };
 
 } // namespace duckdb

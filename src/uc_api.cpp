@@ -246,16 +246,16 @@ UCAPICommitsResult UCAPI::LoadTable(ClientContext &ctx, const string &catalog_na
 	// commit version: when present it equals that anyway (it's the latest ratified version).
 	auto *ltv = yyjson_obj_get(root, "latest-table-version");
 	bool ltv_present = ltv && !yyjson_is_null(ltv);
-	int64_t server_ltv = (int64_t)TryGetNumFromObject(root, "latest-table-version", false, 0);
+	idx_t server_ltv = TryGetNumFromObject(root, "latest-table-version", false, 0);
 
-	int64_t max_commit_version = 0;
+	idx_t max_commit_version = 0;
 	auto *commits = yyjson_obj_get(root, "commits");
 	if (commits && yyjson_is_arr(commits)) {
 		size_t idx, max;
 		duckdb_yyjson::yyjson_val *commit;
 		yyjson_arr_foreach(commits, idx, max, commit) {
 			UCAPICommit c;
-			c.version = (int64_t)TryGetNumFromObject(commit, "version", true);
+			c.version = TryGetNumFromObject(commit, "version", true);
 			c.timestamp = (int64_t)TryGetNumFromObject(commit, "timestamp", true);
 			c.file_name = TryGetStrFromObject(commit, "file-name", true);
 			c.file_size = (int64_t)TryGetNumFromObject(commit, "file-size", true);
@@ -291,16 +291,16 @@ UCAPICommitsResult UCAPI::LoadTable(ClientContext &ctx, const string &catalog_na
 string UCAPI::UpdateTable(ClientContext &ctx, const string &catalog_name, const string &schema_name,
                           const string &table_name, const string &table_id, const string &etag,
                           const UCCredentials &credentials, idx_t version, idx_t timestamp, const string &file_name,
-                          idx_t file_size, idx_t file_modification_timestamp, idx_t backfill_version) {
+                          idx_t file_size, idx_t file_modification_timestamp, optional_idx backfill_version) {
 	string uuid_req = StringUtil::Format(R"({"type": "assert-table-uuid", "uuid": "%s"})", table_id);
 	// YYJsonEncodeString returns a JSON string token w/ quotes, so no quotes in format below
 	string etag_req =
 	    etag.empty() ? "" : StringUtil::Format(R"(, {"type": "assert-etag", "etag": %s})", YYJsonEncodeString(etag));
 	string backfill_update;
-	if (backfill_version != idx_t(-1)) {
+	if (backfill_version.IsValid()) {
 		backfill_update =
 		    StringUtil::Format(R"(, {"action": "set-latest-backfilled-version", "latest-published-version": %lld})",
-		                       (int64_t)backfill_version);
+		                       (int64_t)backfill_version.GetIndex());
 	}
 	string body = StringUtil::Format(
 	    R"({"requirements": [%s%s], "updates": [{"action": "add-commit", "commit": {"version": %lld, "timestamp": %lld, "file-name": "%s", "file-size": %lld, "file-modification-timestamp": %lld}}%s]})",
@@ -309,7 +309,7 @@ string UCAPI::UpdateTable(ClientContext &ctx, const string &catalog_name, const 
 	// XXX: hard-coded delta v1 protocol; protocol negotiation via GET /delta/v1/config not yet implemented
 	string url = StringUtil::Format("%s/api/2.1/unity-catalog/delta/v1/catalogs/%s/schemas/%s/tables/%s",
 	                                credentials.endpoint, catalog_name, schema_name, table_name);
-	string backfill_log = backfill_version == idx_t(-1) ? string("(none)") : to_string((int64_t)backfill_version);
+	string backfill_log = backfill_version.IsValid() ? to_string((int64_t)backfill_version.GetIndex()) : string("(none)");
 	UC_LOG_DEBUG(ctx, "uc-api.UpdateTable %s.%s.%s version=%lld table_id=%s etag=%s backfill_version=%s", catalog_name,
 	             schema_name, table_name, (int64_t)version, table_id.empty() ? "(none)" : table_id,
 	             etag.empty() ? "(none)" : etag, backfill_log);

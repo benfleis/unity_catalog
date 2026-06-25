@@ -10,6 +10,7 @@
 
 #include "storage/uc_table_entry.hpp"
 #include "uc_mutex_protected.hpp"
+#include "duckdb/common/optional_idx.hpp"
 
 namespace duckdb {
 struct CreateTableInfo;
@@ -29,7 +30,7 @@ struct CommitState {
 	// BackfillCommits copies them into _delta_log/ and advances this watermark.
 	// backfilled_version = newest version copied into _delta_log/ (a plain Delta reader sees it
 	// without the catalog gate). Versions <= it are skipped to avoid redundant S3 round-trips.
-	int64_t backfilled_version = -1; // highest version successfully copied
+	optional_idx backfilled_version; // highest version copied; invalid until the first backfill
 };
 
 class TableInformation {
@@ -53,7 +54,8 @@ private:
 	string AttachedCatalogName() const;
 	// Copies outstanding staged commits to _delta_log/ (file I/O, NOT under commit_state's lock).
 	// Takes the current watermark, returns the highest version successfully copied.
-	int64_t BackfillCommits(ClientContext &context, const vector<UCAPICommit> &commits, int64_t backfilled_version);
+	optional_idx BackfillCommits(ClientContext &context, const vector<UCAPICommit> &commits,
+	                             optional_idx backfilled_version);
 	bool is_dirty = false;
 
 public:

@@ -157,37 +157,38 @@ static bool CopyStagedCommitToDeltaLog(ClientContext &context, const string &src
 	}
 }
 
-int64_t TableInformation::BackfillCommits(ClientContext &context, const vector<UCAPICommit> &commits,
-                                          int64_t backfilled_version) {
+optional_idx TableInformation::BackfillCommits(ClientContext &context, const vector<UCAPICommit> &commits,
+                                               optional_idx backfilled_version) {
 	// Operates on a local watermark and does file I/O; the caller writes the returned value back into
 	// commit_state under its lock, so commit_state's lock is never held across these copies.
-	vector<const UCAPICommit *> ordered;
+	vector<reference<const UCAPICommit>> ordered;
 	ordered.reserve(commits.size());
 	for (auto &c : commits) {
-		ordered.push_back(&c);
+		ordered.push_back(c);
 	}
 	std::sort(ordered.begin(), ordered.end(),
-	          [](const UCAPICommit *a, const UCAPICommit *b) { return a->version < b->version; });
-	for (auto *commit : ordered) {
-		if (commit->version <= backfilled_version) {
+	          [](const UCAPICommit &a, const UCAPICommit &b) { return a.version < b.version; });
+	for (auto commit_ref : ordered) {
+		auto const &commit = commit_ref.get();
+		if (backfilled_version.IsValid() && commit.version <= backfilled_version.GetIndex()) {
 			continue;
 		}
-		string src = table_data->storage_location + "/_delta_log/_staged_commits/" + commit->file_name;
+		string src = table_data->storage_location + "/_delta_log/_staged_commits/" + commit.file_name;
 		string dst =
-		    StringUtil::Format("%s/_delta_log/%020llu.json", table_data->storage_location, (uint64_t)commit->version);
+		    StringUtil::Format("%s/_delta_log/%020llu.json", table_data->storage_location, (uint64_t)commit.version);
 		try {
 			// TODO: consider? prefetch _delta_log/ listing (name + size) and skip copies where both match,
 			//       eliminating file/object open round trips if the list is >1 length.
 			if (!CopyStagedCommitToDeltaLog(context, src, dst)) {
 				// false = dst already exists; another session beat us — still update backfill version
 			}
-			backfilled_version = commit->version;
+			backfilled_version = commit.version;
 		} catch (std::exception &e) {
 			// Real failure — stop to avoid advancing backfilled_version past a gap. Surface it: a
 			// silently-swallowed backfill failure lets staged commits accumulate until the server
 			// rejects further commits (HTTP 429, "too many un-backfilled commits").
 			UC_LOG_WARNING(context, "uc.BackfillCommits version=%lld src=%s dst=%s failed: %s",
-			               (long long)commit->version, src.c_str(), dst.c_str(), e.what());
+			               (int64_t)commit.version, src.c_str(), dst.c_str(), e.what());
 			break;
 		}
 	}
@@ -213,7 +214,7 @@ static Value BuildLogTailFromCommits(const UCAPICommitsResult &commits, const st
 	vector<Value> commit_values;
 	for (const auto &commit : commits.commits) {
 		child_list_t<Value> commit_struct;
-		commit_struct.push_back(make_pair("version", Value::BIGINT(commit.version)));
+		commit_struct.push_back(make_pair("version", Value::BIGINT((int64_t)commit.version)));
 		commit_struct.push_back(make_pair("timestamp", Value::BIGINT(commit.timestamp)));
 		commit_struct.push_back(
 		    make_pair("file_name", Value(storage_location + "/_delta_log/_staged_commits/" + commit.file_name)));
@@ -259,7 +260,7 @@ void TableInformation::InternalAttach(ClientContext &context) {
 		info.options["parent_catalog"] = Value(catalog.GetName());
 		info.options["parent_catalog_schema"] = Value(schema.name);
 		info.options["parent_commit"] = Value(true);
-		info.options["max_catalog_version"] = Value::BIGINT(commits.ratified_version);
+		info.options["max_catalog_version"] = Value::BIGINT((int64_t)commits.ratified_version);
 		// Backfill outside commit_state's lock (file I/O), then publish {etag, watermark} atomically.
 		// Only InternalAttach writes backfilled_version and it is serialized by attach_lock, so the
 		// start watermark read here is stable.
@@ -268,13 +269,13 @@ void TableInformation::InternalAttach(ClientContext &context) {
 		// read-only attach: a RO attach must not mutate table storage (it also holds only read-scoped
 		// credentials). Reads still see staged commits via the log_tail + max_catalog_version above.
 		bool read_only = uc_catalog.access_mode == AccessMode::READ_ONLY;
-		int64_t start_wm = commit_state.with_locked([](const CommitState &s) { return s.backfilled_version; });
+		optional_idx start_wm = commit_state.with_locked([](const CommitState &s) { return s.backfilled_version; });
 		if (read_only) {
 			UC_LOG_DEBUG(context,
 			             "uc.InternalAttach %s.%s.%s read-only: skipping backfill (%zu backfillable commit(s))",
 			             table_data->catalog_name, table_data->schema_name, table_data->name, commits.commits.size());
 		}
-		int64_t new_wm = read_only ? start_wm : BackfillCommits(context, commits.commits, start_wm);
+		optional_idx new_wm = read_only ? start_wm : BackfillCommits(context, commits.commits, start_wm);
 		commit_state.with_locked([&](CommitState &s) {
 			s.etag = commits.etag;
 			s.backfilled_version = new_wm;
