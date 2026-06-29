@@ -6,13 +6,13 @@ preconfigured for dev and CI:
 
 - managed tables enabled, auth disabled, **local filesystem only** (no cloud creds);
 - one catalog **`duck`** with two schemas:
-  - **`duck.managed`** — **MANAGED** tables, which in this build are always
+  - **`duck.cmt`** — **MANAGED** tables, which in this build are always
     **catalog-managed** (coordinated commits);
-  - **`duck.external`** — **EXTERNAL** tables, i.e. plain Delta logs (no catalog
+  - **`duck.plain`** — **EXTERNAL** tables, i.e. plain Delta logs (no catalog
     commit coordination);
 - table data under a single dir bind-mounted at an **identical path** on host and
   container (so a host client can resolve UC's absolute `file://` locations), laid
-  out as `duck/managed/…` and `duck/external/…` (see Storage layout).
+  out as `duck/cmt/…` and `duck/plain/…` (see Storage layout).
 
 ## Files
 
@@ -22,7 +22,7 @@ preconfigured for dev and CI:
 | `Dockerfile.base` | upstream `unitycatalog/Dockerfile` + one `COURSIER_CACHE` line (see below) |
 | `patches/`        | UC source patches applied to the checkout at build time (see S3 section) |
 | `server.properties` | duck server config (managed on, auth off, local FS)                  |
-| `entrypoint.sh`   | starts server, waits, idempotently seeds `duck` + `managed`/`external` |
+| `entrypoint.sh`   | starts server, waits, idempotently seeds `duck` + `cmt`/`plain` |
 | `build`        | two-step build (source base → overlay)                                 |
 | `run`          | the single `docker run -v …` line (dev + CI)                           |
 | `uctl`         | host table mgmt via `docker exec … bin/uc …`                           |
@@ -37,10 +37,10 @@ preconfigured for dev and CI:
 ./run                                # starts container, binds a fresh temp dir, prints where
 ./run /path/to/datadir               # ...or bind a dir you choose
 
-./uctl create managed  pets "id INT, name STRING"   # catalog-managed (MANAGED) table
-./uctl create external pets "id INT, name STRING"   # plain (EXTERNAL) table
-./uctl list managed
-./uctl drop managed pets
+./uctl create cmt   id_name "id INT, name STRING"   # catalog-managed (MANAGED) table
+./uctl create plain id_name "id INT, name STRING"   # plain (EXTERNAL) table
+./uctl list cmt
+./uctl drop cmt id_name
 
 docker stop uc-duck
 ```
@@ -85,8 +85,8 @@ or "EXTERNAL but catalog-managed" path here. So:
 
 | schema | table type | result |
 |--------|-----------|--------|
-| `duck.managed`  | `MANAGED`  | catalog-managed, UC-allocated location |
-| `duck.external` | `EXTERNAL` | plain Delta log, client location under `duck/external` |
+| `duck.cmt`   | `MANAGED`  | catalog-managed, UC-allocated location |
+| `duck.plain` | `EXTERNAL` | plain Delta log, client location under `duck/plain` |
 
 `uctl` just picks the type per schema. The `uc` CLI writes a real Delta log
 end-to-end via Delta Kernel (no Spark needed), so both are genuine Delta tables.
@@ -104,17 +104,17 @@ UC hands back `/home/unitycatalog/...`, which doesn't exist on the host.)
 ```
 $UC_DUCK_DATA_DIR/                    # same path on host and in the container
   duck/
-    managed/                          # storage_root of schema duck.managed
+    cmt/                              # storage_root of schema duck.cmt
       __unitystorage/schemas/<schema-uuid>/tables/<table-uuid>/_delta_log + parquet
-    external/                         # plain external tables, one subdir per table
+    plain/                            # plain tables, one subdir per table
       <table>/_delta_log + parquet
 ```
 
-- `duck.managed` has `storage_root = $UC_DUCK_DATA_DIR/duck/managed`, so UC nests its
-  `__unitystorage` tree (and every managed table) under it.
-- `duck.external` has **no** storage_root; `uctl` gives each external table a location
-  at `$UC_DUCK_DATA_DIR/duck/external/<table>` (read from the container's env). Because
-  that is a **sibling** of `duck/managed` (neither under nor above managed storage),
+- `duck.cmt` has `storage_root = $UC_DUCK_DATA_DIR/duck/cmt`, so UC nests its
+  `__unitystorage` tree (and every cmt table) under it.
+- `duck.plain` has **no** storage_root; `uctl` gives each plain table a location
+  at `$UC_DUCK_DATA_DIR/duck/plain/<table>` (read from the container's env). Because
+  that is a **sibling** of `duck/cmt` (neither under nor above cmt storage),
   UC's overlap check passes and **no external location needs to be registered**.
 - `UC_DUCK_DATA_DIR` defaults to `/home/unitycatalog/etc/data` (fine for an
   in-container client); `run.sh` overrides it to the identical-path host dir.
@@ -124,7 +124,7 @@ $UC_DUCK_DATA_DIR/                    # same path on host and in the container
 ## CI usage
 
 The metastore (H2) is **fresh inside the container each run** and the entrypoint
-re-seeds `duck`/`managed`/`external` after the mount, so each `docker run` against a
+re-seeds `duck`/`cmt`/`plain` after the mount, so each `docker run` against a
 new temp dir is isolated. A typical CI step:
 
 ```bash

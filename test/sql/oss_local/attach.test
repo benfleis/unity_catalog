@@ -1,5 +1,5 @@
 # name: test/sql/oss_local/attach.test
-# description: attach/detach/USE semantics for the unity_catalog extension against the OSS UC ducklabs image. Paired attach.py declares the server (uc_server) and seeds duck.managed.id_name.
+# description: attach/detach/USE semantics for the unity_catalog extension against the OSS UC ducklabs image. Paired attach.py declares the server (uc_server) and seeds duck.cmt.id_name.
 # group: [oss_local]
 
 require parquet
@@ -9,6 +9,8 @@ require unity_catalog
 require delta
 
 require httpfs
+
+require-env UC_TEST_CATALOG
 
 statement ok
 CREATE SECRET (
@@ -23,7 +25,7 @@ CREATE SECRET (
 #
 
 statement ok
-ATTACH 'duck' (TYPE unity_catalog);
+ATTACH '${UC_TEST_CATALOG}' (TYPE unity_catalog);
 
 # USE <catalog> alone fails: OSS UC exposes no default schema to resolve to.
 statement error
@@ -33,7 +35,7 @@ Catalog Error: SET schema: No catalog + schema named "duck" found.
 
 # ... but a fully-qualified catalog.schema works.
 statement ok
-USE duck.managed;
+USE duck.cmt;
 
 statement ok
 USE memory;
@@ -46,7 +48,7 @@ DETACH duck;
 #
 
 statement ok
-ATTACH 'duck' (TYPE unity_catalog, DEFAULT_SCHEMA 'managed');
+ATTACH '${UC_TEST_CATALOG}' (TYPE unity_catalog, DEFAULT_SCHEMA 'cmt');
 
 statement ok
 USE duck;

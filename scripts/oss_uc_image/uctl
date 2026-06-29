@@ -1,12 +1,12 @@
 #!/bin/bash
 # Host-side table management for the running duck container, via `docker exec`.
 # The two schemas hold genuinely different kinds of Delta table:
-#   managed  -> MANAGED  : in this UC 0.5 build a managed table is ALWAYS
+#   cmt  -> MANAGED  : in this UC 0.5 build a cmt table is ALWAYS
 #                          catalog-managed (the CLI commits via UCCatalogManagedClient,
 #                          coordinated commits). No `catalogManaged` property needed --
 #                          it's implicit; setting it would be redundant.
-#   external -> EXTERNAL : a plain Delta log with no UC commit coordination. We give
-#                          it a location under .../duck/external. UC just registers it.
+#   plain -> EXTERNAL : a plain Delta log with no UC commit coordination. We give
+#                          it a location under .../duck/plain. UC just registers it.
 # (There is no "plain MANAGED" Delta table here: MANAGED implies catalog-managed.)
 #
 # Usage:
@@ -16,7 +16,7 @@
 #   ./uctl list   <schema>
 #   ./uctl uc     <raw uc args...>          # escape hatch
 #
-# <schema> is managed or external. Env: UC_DUCK_CONTAINER (default uc-duck).
+# <schema> is cmt or plain. Env: UC_DUCK_CONTAINER (default uc-duck).
 set -euo pipefail
 
 CONTAINER="${UC_DUCK_CONTAINER:-uc-duck}"
@@ -25,7 +25,7 @@ dexec() { docker exec "$CONTAINER" bin/uc "$@"; }
 
 # Data root the server is actually using (run.sh sets UC_DUCK_DATA_DIR to a path
 # mounted identically on host+container; default matches entrypoint's fallback).
-# EXTERNAL tables get an explicit location under it, sibling of duck/managed.
+# EXTERNAL tables get an explicit location under it, sibling of duck/cmt.
 data_root() {
   local d; d="$(docker exec "$CONTAINER" printenv UC_DUCK_DATA_DIR 2>/dev/null || true)"
   printf '%s' "${d:-/home/unitycatalog/etc/data}"
@@ -37,17 +37,17 @@ cmd="${1:-}"; shift || usage
 
 case "$cmd" in
   create)
-    schema="${1:?schema (managed|external)}"; table="${2:?table name}"; cols="${3:?columns}"
+    schema="${1:?schema (cmt|plain)}"; table="${2:?table name}"; cols="${3:?columns}"
     case "$schema" in
-      managed)
-        dexec table create --full_name "duck.managed.$table" --columns "$cols" \
+      cmt)
+        dexec table create --full_name "duck.cmt.$table" --columns "$cols" \
           --table_type MANAGED
         ;;
-      external)
-        dexec table create --full_name "duck.external.$table" --columns "$cols" \
-          --table_type EXTERNAL --storage_location "$(data_root)/duck/external/$table"
+      plain)
+        dexec table create --full_name "duck.plain.$table" --columns "$cols" \
+          --table_type EXTERNAL --storage_location "$(data_root)/duck/plain/$table"
         ;;
-      *) echo "unknown schema '$schema' (use managed|external)" >&2; exit 2 ;;
+      *) echo "unknown schema '$schema' (use cmt|plain)" >&2; exit 2 ;;
     esac
     ;;
   drop)

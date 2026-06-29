@@ -10,7 +10,9 @@ def get_spark_session():
     if not all([token, endpoint]):
         raise ValueError("Missing required environment variables: DATABRICKS_TOKEN and DATABRICKS_ENDPOINT")
 
-    return DatabricksSession.builder.serverless().profile('DEFAULT').getOrCreate()
+    return DatabricksSession.builder.remote(
+        host=endpoint, token=token, serverless=True
+    ).getOrCreate()
 
 def drop_tables(schema_to_drop, dry_run=True):
     spark = get_spark_session()

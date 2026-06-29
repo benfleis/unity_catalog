@@ -58,7 +58,7 @@ IMAGE = os.environ.get("UC_DUCK_IMAGE", "ghcr.io/benfleis/unitycatalog-ducklabs:
 ENDPOINT = f"http://127.0.0.1:{PORT}"
 
 _CATALOG = "duck"
-_SEED_SCHEMAS = ("managed", "external")  # entrypoint seeds these after the catalog
+_SEED_SCHEMAS = ("cmt", "plain")  # entrypoint seeds these after the catalog
 _READY_URL = f"{ENDPOINT}/api/2.1/unity-catalog/schemas?catalog_name={_CATALOG}"
 _READY_TIMEOUT_S = 120
 
@@ -77,11 +77,11 @@ def _docker(*args, check=True):
 
 
 def _wait_ready(timeout_s):
-    """Poll until the seeded catalog AND its managed/external schemas exist, or time out.
+    """Poll until the seeded catalog AND its cmt/plain schemas exist, or time out.
 
     The entrypoint seeds the `duck` catalog first, then its schemas, so waiting only on
     the catalog races the seed -- `uctl create` then 404s with SCHEMA_NOT_FOUND. Wait on
-    the schemas instead (external is seeded last, so its presence implies managed too).
+    the schemas instead (plain is seeded last, so its presence implies cmt too).
     """
     deadline = time.time() + timeout_s
     last = "no attempt"
@@ -102,14 +102,12 @@ def _wait_ready(timeout_s):
     )
 
 
-@pytest.fixture(scope="session")
-def uc_server():
-    """Provision/acquire the OSS UC server resource per OSS_UC_SERVER (see module docstring)."""
-    spec = OSS_UC_SERVER
-    assert (
-        spec.create == "ALWAYS_CREATE" and spec.destroy == "ALWAYS_DESTROY"
-    ), f"only ALWAYS_CREATE/ALWAYS_DESTROY is wired today; got {spec}"
+def start_container():
+    """Start a fresh OSS UC container on the fixed name/port; return UcServer.
 
+    Shared by the `uc_server` fixture (run path) and OssProvisioner (--repl, which runs
+    no fixtures so the provisioner owns the container).
+    """
     data_dir = tempfile.mkdtemp(prefix="uc-duck-data-")
     env = {
         **os.environ,
@@ -121,11 +119,29 @@ def uc_server():
         _docker("rm", "-f", CONTAINER, check=False)  # ALWAYS_CREATE: force a fresh container
         # `run` = the kit's single source of truth for the docker-run line (identical-path mount).
         subprocess.run([str(SCRIPTS_DIR / "run"), data_dir], env=env, check=True)
-        _wait_ready(_READY_TIMEOUT_S)  # waits until the seeded duck.managed/external schemas exist
-    try:
-        yield UcServer(endpoint=ENDPOINT, container=CONTAINER, data_dir=data_dir)
-    finally:
-        with step("stopping OSS UC docker image"):
-            _docker("stop", CONTAINER, check=False)  # ALWAYS_DESTROY (run used --rm, so this removes it)
+        _wait_ready(_READY_TIMEOUT_S)  # waits until the seeded duck.cmt/plain schemas exist
+    return UcServer(endpoint=ENDPOINT, container=CONTAINER, data_dir=data_dir)
+
+
+def stop_container(data_dir=None):
+    """Stop the OSS UC container (run used --rm, so stop removes it) + clean its data dir."""
+    with step("stopping OSS UC docker image"):
+        _docker("stop", CONTAINER, check=False)  # ALWAYS_DESTROY
+    if data_dir:
         with step("removing test temporary dir"):
             shutil.rmtree(data_dir, ignore_errors=True)
+
+
+@pytest.fixture(scope="session")
+def uc_server():
+    """Provision/acquire the OSS UC server resource per OSS_UC_SERVER (see module docstring)."""
+    spec = OSS_UC_SERVER
+    assert (
+        spec.create == "ALWAYS_CREATE" and spec.destroy == "ALWAYS_DESTROY"
+    ), f"only ALWAYS_CREATE/ALWAYS_DESTROY is wired today; got {spec}"
+
+    srv = start_container()
+    try:
+        yield srv
+    finally:
+        stop_container(srv.data_dir)

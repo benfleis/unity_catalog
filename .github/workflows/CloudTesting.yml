@@ -23,8 +23,7 @@ jobs:
       GEN: ninja
       DUCKDB_PLATFORM: linux_amd64
       BUILD_EXTENSION_TEST_DEPS: full
-      DATABRICKS_WRITE_TEST_CATALOG: duckdb_write_testing
-      RUN_WRITE_TESTS: 1
+      UC_TEST_CATALOG: duckdb_write_testing
 
     steps:
       - name: Install required ubuntu packages
@@ -80,7 +79,7 @@ jobs:
 
       - name: Generate random schema name
         run: |
-          echo "DATABRICKS_WRITE_TEST_SCHEMA=test_schema_$(uuidgen | tr '[:upper:]' '[:lower:]' | tr '-' '_')" >> $GITHUB_ENV
+          echo "UC_TEST_SCHEMA=test_schema_$(uuidgen | tr '[:upper:]' '[:lower:]' | tr '-' '_')" >> $GITHUB_ENV
 
       - name: Prepare write tests
         run: |

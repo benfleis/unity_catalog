@@ -6,7 +6,7 @@ Declares the running OSS UC server as a resource via the `uc_server` fixture
 here via `uctl` (not yet modeled as its own resource).
 
 Lifecycle: uc_server (session) stands up a fresh ducklabs server -> this driver seeds a
-clean duck.managed.id_name -> run_paired runs the .test body through the unittest binary
+clean duck.cmt.id_name -> run_paired runs the .test body through the unittest binary
 -> table dropped -> (session end) server torn down.
 """
 
@@ -14,7 +14,7 @@ from driver import run_paired, step
 
 from uc import uctl  # uc_server fixture comes from oss_local/conftest.py
 
-SCHEMA = "managed"
+SCHEMA = "cmt"
 TABLE = "id_name"
 COLUMNS = "id INT, name STRING"
 

@@ -1,17 +1,17 @@
 #!/bin/bash
 # Self-contained smoke test: boots the duck image against a fresh temp dir,
 # creates + drops one table in each schema, and asserts that
-#   - a catalog-managed table in duck.managed writes a Delta log under
-#     <tmp>/duck/managed and carries the `catalogManaged` feature,
-#   - a plain external table in duck.external writes a Delta log under
-#     <tmp>/duck/external and does NOT carry it,
+#   - a catalog-managed table in duck.cmt writes a Delta log under
+#     <tmp>/duck/cmt and carries the `catalogManaged` feature,
+#   - a plain external table in duck.plain writes a Delta log under
+#     <tmp>/duck/plain and does NOT carry it,
 # then tears everything down. Exit 0 = pass. Intended for CI.
 #
-# Env: FINAL_IMAGE (default duckdb/unitycatalog:local), UC_DUCK_PORT (default 8088).
+# Env: FINAL_IMAGE (default ghcr.io/benfleis/unitycatalog-ducklabs:local), UC_DUCK_PORT (default 8088).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IMAGE="${FINAL_IMAGE:-duckdb/unitycatalog:local}"
+IMAGE="${FINAL_IMAGE:-ghcr.io/benfleis/unitycatalog-ducklabs:local}"
 PORT="${UC_DUCK_PORT:-8088}"
 CONTAINER="uc-duck-smoke-$$"
 TMPDIR_DATA="$(mktemp -d -t uc-duck-smoke-XXXXXX)"
@@ -39,11 +39,11 @@ echo ">> starting $CONTAINER (image $IMAGE, data $TMPDIR_DATA)"
 docker run -d --name "$CONTAINER" -p "$PORT:8080" \
   -v "$TMPDIR_DATA:$TMPDIR_DATA" -e "UC_DUCK_DATA_DIR=$TMPDIR_DATA" "$IMAGE" >/dev/null
 
-echo ">> waiting for seed (duck.managed + duck.external)..."
+echo ">> waiting for seed (duck.cmt + duck.plain)..."
 ready=
 for _ in $(seq 1 90); do
-  if docker exec "$CONTAINER" bin/uc schema get --full_name duck.managed  >/dev/null 2>&1 \
-  && docker exec "$CONTAINER" bin/uc schema get --full_name duck.external >/dev/null 2>&1; then
+  if docker exec "$CONTAINER" bin/uc schema get --full_name duck.cmt  >/dev/null 2>&1 \
+  && docker exec "$CONTAINER" bin/uc schema get --full_name duck.plain >/dev/null 2>&1; then
     ready=1; break
   fi
   docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null | grep -q true \
@@ -51,44 +51,44 @@ for _ in $(seq 1 90); do
   sleep 1
 done
 [ -n "$ready" ] || { bad "seed did not complete in time; logs:"; docker logs "$CONTAINER" 2>&1 | tail -40 >&2; exit 1; }
-ok "catalog 'duck' + schemas 'managed'/'external' seeded"
+ok "catalog 'duck' + schemas 'cmt'/'plain' seeded"
 
 uctl() { "$SCRIPT_DIR/uctl" "$@"; }
 
-# --- managed: catalog-managed ------------------------------------------------
-echo ">> duck.managed.pets (catalog-managed)"
-create_out="$(uctl create managed pets "id INT, name STRING")"
+# --- cmt: catalog-managed ----------------------------------------------------
+echo ">> duck.cmt.id_name (catalog-managed)"
+create_out="$(uctl create cmt id_name "id INT, name STRING")"
 if echo "$create_out" | grep -q "catalogManaged"; then
-  ok "managed table reports catalogManaged feature"
+  ok "cmt table reports catalogManaged feature"
 else
-  bad "managed table missing catalogManaged feature; got: $create_out"
+  bad "cmt table missing catalogManaged feature; got: $create_out"
 fi
-if find "$TMPDIR_DATA/duck/managed" -name '_delta_log' -type d 2>/dev/null | grep -q .; then
-  ok "managed data written under host <tmp>/duck/managed"
+if find "$TMPDIR_DATA/duck/cmt" -name '_delta_log' -type d 2>/dev/null | grep -q .; then
+  ok "cmt data written under host <tmp>/duck/cmt"
 else
-  bad "no _delta_log found under $TMPDIR_DATA/duck/managed"
+  bad "no _delta_log found under $TMPDIR_DATA/duck/cmt"
 fi
 
-# --- external: plain, not catalog-managed ------------------------------------
-echo ">> duck.external.pets (external, plain)"
-create_out="$(uctl create external pets "id INT, name STRING")"
+# --- plain: not catalog-managed ----------------------------------------------
+echo ">> duck.plain.id_name (plain)"
+create_out="$(uctl create plain id_name "id INT, name STRING")"
 if echo "$create_out" | grep -q "catalogManaged"; then
-  bad "external table unexpectedly reports catalogManaged"
+  bad "plain table unexpectedly reports catalogManaged"
 else
-  ok "external table has no catalogManaged feature"
+  ok "plain table has no catalogManaged feature"
 fi
-if find "$TMPDIR_DATA/duck/external" -name '_delta_log' -type d 2>/dev/null | grep -q .; then
-  ok "external data written under host <tmp>/duck/external"
+if find "$TMPDIR_DATA/duck/plain" -name '_delta_log' -type d 2>/dev/null | grep -q .; then
+  ok "plain data written under host <tmp>/duck/plain"
 else
-  bad "no _delta_log found under $TMPDIR_DATA/duck/external"
+  bad "no _delta_log found under $TMPDIR_DATA/duck/plain"
 fi
 
 # --- drop loop ---------------------------------------------------------------
 echo ">> drop"
-uctl drop managed  pets >/dev/null && ok "dropped duck.managed.pets"  || bad "drop duck.managed.pets failed"
-uctl drop external pets >/dev/null && ok "dropped duck.external.pets" || bad "drop duck.external.pets failed"
-docker exec "$CONTAINER" bin/uc table get --full_name duck.managed.pets >/dev/null 2>&1 \
-  && bad "duck.managed.pets still present after drop" || ok "duck.managed.pets gone after drop"
+uctl drop cmt    id_name >/dev/null && ok "dropped duck.cmt.id_name"   || bad "drop duck.cmt.id_name failed"
+uctl drop plain  id_name >/dev/null && ok "dropped duck.plain.id_name" || bad "drop duck.plain.id_name failed"
+docker exec "$CONTAINER" bin/uc table get --full_name duck.cmt.id_name >/dev/null 2>&1 \
+  && bad "duck.cmt.id_name still present after drop" || ok "duck.cmt.id_name gone after drop"
 
 echo
 echo "smoke test: $pass passed, $fail failed"

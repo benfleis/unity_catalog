@@ -34,12 +34,12 @@ started container : $CONTAINER
 image             : $IMAGE
 api               : http://localhost:$PORT
 data dir (host)   : $HOSTDIR
-  duck.managed  data -> $HOSTDIR/duck/managed/__unitystorage/...
-  duck.external data -> $HOSTDIR/duck/external/<table>/...
+  duck.cmt   data -> $HOSTDIR/duck/cmt/__unitystorage/...
+  duck.plain data -> $HOSTDIR/duck/plain/<table>/...
 
-manage tables     : ./uctl create managed  pets "id INT, name STRING"
-                    ./uctl create external pets "id INT, name STRING"
-                    ./uctl list  managed
-                    ./uctl drop  managed pets
+manage tables     : ./uctl create cmt   id_name "id INT, name STRING"
+                    ./uctl create plain id_name "id INT, name STRING"
+                    ./uctl list  cmt
+                    ./uctl drop  cmt id_name
 stop              : docker stop $CONTAINER
 EOF

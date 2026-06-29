@@ -19,7 +19,7 @@ RUN set -eux; \
     rm -f /home/unitycatalog/etc/db/h2db*.db; \
     # Drop bundled sample table/volume data.
     rm -rf /home/unitycatalog/etc/data/managed /home/unitycatalog/etc/data/external; \
-    mkdir -p /home/unitycatalog/etc/data/duck/managed /home/unitycatalog/etc/data/duck/external; \
+    mkdir -p /home/unitycatalog/etc/data/duck/cmt /home/unitycatalog/etc/data/duck/plain; \
     # S3-readiness: put a conf dir on the CLI + server classpath so a core-site.xml
     # the entrypoint generates at runtime (only when UC_DUCK_S3_ENDPOINT is set,
     # e.g. MinIO) is loaded by Hadoop S3A. Dormant for local FS and AWS S3 (no file
