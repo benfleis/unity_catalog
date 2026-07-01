@@ -34,7 +34,7 @@ UCTableSet::UCTableSet(UCSchemaEntry &schema) : catalog(schema.ParentCatalog().C
 }
 
 static ColumnDefinition CreateColumnDefinition(ClientContext &context, UCAPIColumnDefinition &coldef) {
-	return {coldef.name, UCUtils::TypeToLogicalType(context, coldef.type_text)};
+	return {Identifier(coldef.name), UCUtils::TypeToLogicalType(context, coldef.type_text)};
 }
 
 optional_ptr<CatalogEntry> TableInformation::GetVersion(ClientContext &context, const EntryLookupInfo &lookup_info) {
@@ -60,7 +60,7 @@ optional_ptr<CatalogEntry> TableInformation::GetVersion(ClientContext &context, 
 	InternalAttach(context);
 	RefreshCredentials(context);
 	auto &delta_catalog = *GetInternalCatalog();
-	auto &schema = delta_catalog.GetSchema(context, table_data->schema_name);
+	auto &schema = delta_catalog.GetSchema(context, Identifier(table_data->schema_name));
 	auto transaction = schema.GetCatalogTransaction(context);
 	auto table_entry = schema.LookupEntry(transaction, lookup_info);
 	auto create_info = table_entry->GetInfo();
@@ -94,7 +94,7 @@ void TableInformation::RefreshCredentials(ClientContext &context) {
 	CreateSecretInput input;
 	input.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
 	input.persist_type = SecretPersistType::TEMPORARY;
-	input.name = "__internal_uc_" + table_data->table_id;
+	input.name = Identifier("__internal_uc_" + table_data->table_id);
 	input.type = "s3";
 	input.provider = "config";
 	input.options = {
@@ -121,7 +121,7 @@ void TableInformation::InternalDetach(ClientContext &context, const lock_guard<m
 	}
 	auto &db_manager = DatabaseManager::Get(context);
 	auto name = AttachedCatalogName();
-	db_manager.DetachDatabase(context, name, OnEntryNotFound::THROW_EXCEPTION);
+	db_manager.DetachDatabase(context, Identifier(name), OnEntryNotFound::THROW_EXCEPTION);
 	internal_attached_database = nullptr;
 }
 
@@ -150,12 +150,12 @@ Value TableInformation::BuildLogTail(ClientContext &context) {
 	vector<Value> commit_values;
 	for (const auto &commit : commits.commits) {
 		child_list_t<Value> commit_struct;
-		commit_struct.push_back(make_pair("version", Value::BIGINT(commit.version)));
-		commit_struct.push_back(make_pair("timestamp", Value::BIGINT(commit.timestamp)));
-		commit_struct.push_back(make_pair(
+		commit_struct.emplace_back(make_pair("version", Value::BIGINT(commit.version)));
+		commit_struct.emplace_back(make_pair("timestamp", Value::BIGINT(commit.timestamp)));
+		commit_struct.emplace_back(make_pair(
 		    "file_name", Value(table_data->storage_location + "/_delta_log/_staged_commits/" + commit.file_name)));
-		commit_struct.push_back(make_pair("file_size", Value::BIGINT(commit.file_size)));
-		commit_struct.push_back(
+		commit_struct.emplace_back(make_pair("file_size", Value::BIGINT(commit.file_size)));
+		commit_struct.emplace_back(
 		    make_pair("file_modification_timestamp", Value::BIGINT(commit.file_modification_timestamp)));
 		commit_values.push_back(Value::STRUCT(std::move(commit_struct)));
 	}
@@ -181,7 +181,7 @@ void TableInformation::InternalAttach(ClientContext &context) {
 
 	// Create the attach info for the table
 	AttachInfo info;
-	info.name = AttachedCatalogName();
+	info.name = Identifier(AttachedCatalogName());
 	info.options = {{"type", Value("Delta")},
 	                {"child_catalog_mode", Value(true)},
 	                {"internal_table_name", Value(name)},
@@ -191,7 +191,7 @@ void TableInformation::InternalAttach(ClientContext &context) {
 	if (IsCCV2()) {
 		auto log_tail = BuildLogTail(context);
 		info.options["parent_catalog"] = Value(catalog.GetName());
-		info.options["parent_catalog_schema"] = Value(schema.name);
+		info.options["parent_catalog_schema"] = Value(schema.name.GetIdentifierName());
 		info.options["parent_commit"] = Value(true);
 		if (!log_tail.IsNull()) {
 			info.options["log_tail"] = log_tail;
@@ -247,7 +247,7 @@ void UCTableSet::Checkpoint(ClientContext &context, bool force) {
 
 void UCTableSet::LoadEntries(ClientContext &context, const lock_guard<mutex> &_entry_lock) {
 	auto &unity_catalog = catalog.Cast<UnityCatalog>();
-	auto get_tables_result = UCAPI::GetTables(context, catalog, schema.name, unity_catalog.credentials);
+	auto get_tables_result = UCAPI::GetTables(context, catalog, schema.name.GetIdentifierName(), unity_catalog.credentials);
 
 	for (auto &table : get_tables_result) {
 		D_ASSERT(schema.name == table.schema_name);
@@ -269,7 +269,7 @@ void UCTableSet::LoadEntries(ClientContext &context, const lock_guard<mutex> &_e
 		                          std::forward_as_tuple(catalog, schema));
 		auto &table_info = res.first->second;
 
-		info.table = table.name;
+		info.SetTableName(Identifier(table.name));
 		auto table_entry = make_uniq<UCTableEntry>(catalog, schema, table_info, info);
 
 		table_info.table_data = make_uniq<UCAPITable>(table);

@@ -134,7 +134,7 @@ LogicalType UCUtils::TypeToLogicalType(ClientContext &context, const string &typ
 				}
 				auto child_name = child_str.substr(0, type_sep);
 				auto child_type = UCUtils::TypeToLogicalType(context, child_str.substr(type_sep + 1, string::npos));
-				children.push_back({child_name, child_type});
+				children.emplace_back(child_name, child_type);
 				if (next_sep == type_end) {
 					break;
 				}

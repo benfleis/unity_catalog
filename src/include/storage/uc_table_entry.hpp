@@ -22,14 +22,14 @@ struct UCTableInfo {
 		create_info = make_uniq<CreateTableInfo>();
 	}
 	UCTableInfo(const string &schema, const string &table) {
-		create_info = make_uniq<CreateTableInfo>(string(), schema, table);
+		create_info = make_uniq<CreateTableInfo>(QualifiedName(Identifier(), Identifier(schema), Identifier(table)));
 	}
 	UCTableInfo(const SchemaCatalogEntry &schema, const string &table) {
-		create_info = make_uniq<CreateTableInfo>((SchemaCatalogEntry &)schema, table);
+		create_info = make_uniq<CreateTableInfo>((SchemaCatalogEntry &)schema, Identifier(table));
 	}
 
 	const string &GetTableName() const {
-		return create_info->table;
+		return create_info->GetTableName().GetIdentifierName();
 	}
 
 	unique_ptr<CreateTableInfo> create_info;

@@ -27,7 +27,7 @@ static unique_ptr<BaseSecret> CreateUCSecretFunction(ClientContext &, CreateSecr
 		name = "unity_catalog";
 	}
 
-	auto result = make_uniq<KeyValueSecret>(prefix_paths, name, "config", input.name);
+	auto result = make_uniq<KeyValueSecret>(prefix_paths, Identifier(name), "config", input.name);
 	for (const auto &named_param : input.options) {
 		auto lower_name = StringUtil::Lower(named_param.first);
 
