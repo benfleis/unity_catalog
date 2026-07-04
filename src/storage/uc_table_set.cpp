@@ -337,7 +337,8 @@ void UCTableSet::Checkpoint(ClientContext &context, bool force) {
 
 void UCTableSet::LoadEntries(ClientContext &context, const lock_guard<mutex> &_entry_lock) {
 	auto &unity_catalog = catalog.Cast<UnityCatalog>();
-	auto get_tables_result = UCAPI::GetTables(context, catalog, schema.name.GetIdentifierName(), unity_catalog.credentials);
+	auto get_tables_result =
+	    UCAPI::GetTables(context, catalog, schema.name.GetIdentifierName(), unity_catalog.credentials);
 
 	for (auto &table : get_tables_result) {
 		D_ASSERT(schema.name == table.schema_name);
