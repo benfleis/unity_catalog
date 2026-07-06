@@ -58,16 +58,16 @@ run_databricks_tests:
 # Before running this, ensure your env is configured:
 #    >   . scripts/run_databricks_env
 
-# Prepare the main write test files by copying the tables from the `source` schema to the `{DATABRICKS_WRITE_TEST_SCHEMA}` schema
+# Prepare the main write test files by copying the tables from the `source` schema to the `{UC_TEST_SCHEMA}` schema
 write_tests_prepare: venv
-	${PYTHON_BIN} scripts/databricks_data_gen/generate_databricks_test_data.py copy ${DATABRICKS_WRITE_TEST_CATALOG}.source ${DATABRICKS_WRITE_TEST_CATALOG}.${DATABRICKS_WRITE_TEST_SCHEMA}
-	${PYTHON_BIN} scripts/databricks_data_gen/generate_databricks_test_data.py copy ${DATABRICKS_WRITE_TEST_CATALOG}.source ${DATABRICKS_WRITE_TEST_CATALOG}.${DATABRICKS_WRITE_TEST_SCHEMA} --catalog-managed
+	${PYTHON_BIN} scripts/databricks_data_gen/generate_databricks_test_data.py copy ${UC_TEST_CATALOG}.source ${UC_TEST_CATALOG}.${UC_TEST_SCHEMA}
+	${PYTHON_BIN} scripts/databricks_data_gen/generate_databricks_test_data.py copy ${UC_TEST_CATALOG}.source ${UC_TEST_CATALOG}.${UC_TEST_SCHEMA} --catalog-managed
 
 write_tests_run:
 	$(BUILD_DIR)/test/unittest "test/sql/databricks/write_tests/*"
 
 write_tests_cleanup:
-	${PYTHON_BIN} scripts/databricks_data_gen/clean_test_data.py ${DATABRICKS_WRITE_TEST_CATALOG}.${DATABRICKS_WRITE_TEST_SCHEMA}
+	${PYTHON_BIN} scripts/databricks_data_gen/clean_test_data.py ${UC_TEST_CATALOG}.${UC_TEST_SCHEMA}
 
 # - fetches credentials from 1password
 # - generates new schema name
@@ -77,4 +77,4 @@ write_tests_cleanup:
 # - cleans up data
 # NOTE: may leave some data around on s3, needs investigation!
 run_write_tests: venv
-	RUN_WRITE_TESTS=1 ${ENV_DATABRICKS_CMD} $(MAKE) -k write_tests_prepare write_tests_run write_tests_cleanup
+	${ENV_DATABRICKS_CMD} $(MAKE) -k write_tests_prepare write_tests_run write_tests_cleanup

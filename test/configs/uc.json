@@ -1,0 +1,4 @@
+{
+  "description": "UC test policy: network/HTTP errors are FATAL, not skipped. Overrides the unittest binary default skip_error_messages ({HTTP, Unable to connect}) with an empty set, so a broken credential route / endpoint surfaces as a real failure instead of a silently-skipped test.",
+  "skip_error_messages": "[]"
+}
