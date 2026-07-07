@@ -1,5 +1,5 @@
 # name: test/sql/oss_local/table-plain/catalog_managed.test
-# description: catalog-managed PROTOCOL contrast (absence) -- duck.plain tables are plain Delta logs with no UC commit coordination, so reading does NOT call LoadTable and writing does NOT call UpdateTable. The shared data round-trip lives in oss_local/rw.test; this asserts ONLY the absence of the protocol calls (the plain half of the contrast with table-cmt/catalog_managed). Paired catalog_managed.py provisions a unique empty duck.plain.${UC_TEST_TABLE}.
+# description: catalog-managed PROTOCOL contrast (absence) -- duck.plain tables are plain Delta logs with no UC commit coordination, so reading does NOT call LoadTable and writing does NOT call UpdateTable. The shared data round-trip lives in oss_local/rw.test; this asserts ONLY the absence of the protocol calls (the plain half of the contrast with table-cmt/catalog_managed). Paired catalog_managed.py provisions a unique empty duck.plain.{UC_TEST_TABLE}.
 # group: [oss_local]
 
 require parquet
@@ -23,7 +23,7 @@ CREATE SECRET (
 );
 
 statement ok
-ATTACH '${UC_TEST_CATALOG}' AS duck (TYPE UNITY_CATALOG, DEFAULT_SCHEMA 'plain');
+ATTACH '{UC_TEST_CATALOG}' AS duck (TYPE UNITY_CATALOG, DEFAULT_SCHEMA 'plain');
 
 statement ok
 CALL enable_logging(level='DEBUG');
@@ -33,11 +33,11 @@ CALL enable_logging(level='DEBUG');
 #
 
 statement ok
-FROM duck.plain.${UC_TEST_TABLE};
+FROM duck.plain.{UC_TEST_TABLE};
 
 query I
 SELECT count(*) FROM duckdb_logs()
-WHERE message LIKE 'uc-api.LoadTable duck.plain.${UC_TEST_TABLE}%';
+WHERE message LIKE 'uc-api.LoadTable duck.plain.{UC_TEST_TABLE}%';
 ----
 0
 
@@ -46,10 +46,10 @@ WHERE message LIKE 'uc-api.LoadTable duck.plain.${UC_TEST_TABLE}%';
 #
 
 statement ok
-INSERT INTO duck.plain.${UC_TEST_TABLE} VALUES (1, 'blabla');
+INSERT INTO duck.plain.{UC_TEST_TABLE} VALUES (1, 'blabla');
 
 query I
 SELECT count(*) FROM duckdb_logs()
-WHERE message LIKE 'uc-api.UpdateTable duck.plain.${UC_TEST_TABLE}%';
+WHERE message LIKE 'uc-api.UpdateTable duck.plain.{UC_TEST_TABLE}%';
 ----
 0

@@ -1,5 +1,5 @@
 # name: test/sql/oss_local/attach.test
-# description: attach/detach/USE semantics for the unity_catalog extension against the OSS UC ducklabs image. Paired attach.py declares the server (uc_server) and provisions a unique empty duck.cmt.${UC_TEST_TABLE}.
+# description: attach/detach/USE semantics for the unity_catalog extension against the OSS UC ducklabs image. Paired attach.py declares the server (uc_server) and provisions a unique empty duck.cmt.{UC_TEST_TABLE}.
 # group: [oss_local]
 
 require parquet
@@ -27,7 +27,7 @@ CREATE SECRET (
 #
 
 statement ok
-ATTACH '${UC_TEST_CATALOG}' (TYPE unity_catalog);
+ATTACH '{UC_TEST_CATALOG}' (TYPE unity_catalog);
 
 # USE <catalog> alone fails: OSS UC exposes no default schema to resolve to.
 statement error
@@ -50,7 +50,7 @@ DETACH duck;
 #
 
 statement ok
-ATTACH '${UC_TEST_CATALOG}' (TYPE unity_catalog, DEFAULT_SCHEMA 'cmt');
+ATTACH '{UC_TEST_CATALOG}' (TYPE unity_catalog, DEFAULT_SCHEMA 'cmt');
 
 statement ok
 USE duck;
@@ -58,9 +58,9 @@ USE duck;
 # Write a row through the catalog-managed path, then read it back (id_name is
 # seeded empty by attach.py).
 statement ok
-INSERT INTO ${UC_TEST_TABLE} VALUES (2, 'two');
+INSERT INTO {UC_TEST_TABLE} VALUES (2, 'two');
 
 query II
-SELECT id, name FROM ${UC_TEST_TABLE} LIMIT 1;
+SELECT id, name FROM {UC_TEST_TABLE} LIMIT 1;
 ----
 2	two

@@ -27,14 +27,14 @@ set ignore_error_messages
 statement ok
 CREATE SECRET (
     TYPE unity_catalog,
-    TOKEN '${DATABRICKS_TOKEN}',
-    ENDPOINT '${DATABRICKS_ENDPOINT}',
-    AWS_REGION '${DATABRICKS_REGION}'
+    TOKEN '{DATABRICKS_TOKEN}',
+    ENDPOINT '{DATABRICKS_ENDPOINT}',
+    AWS_REGION '{DATABRICKS_REGION}'
 );
 
 # Attach to databricks through the unity catalog API
 statement ok
-ATTACH '${UC_TEST_CATALOG}' AS databricks_catalog (TYPE unity_catalog, DEFAULT_SCHEMA '${UC_TEST_SCHEMA}');
+ATTACH '{UC_TEST_CATALOG}' AS databricks_catalog (TYPE unity_catalog, DEFAULT_SCHEMA '{UC_TEST_SCHEMA}');
 
 statement ok
 USE databricks_catalog;

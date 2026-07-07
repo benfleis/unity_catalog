@@ -1,5 +1,5 @@
 # name: test/sql/oss_local/table-cmt/checkpoint.test
-# description: catalog-managed (CMT) checkpoint variant -- unity_catalog_checkpoint_table forwarding against a SINGLE catalog-managed table (duck.cmt.${UC_TEST_TABLE}) -- error cases, then checkpoint via FQ / USE-cat+qualified / USE-cat + bare / USE-cat.schema + bare, advancing one version between each, then assert the checkpoint files landed under the cmt schema dir. Reuses id_name (no bespoke tables). The cmt half of the contrast with table-plain/checkpoint. Paired checkpoint.py provisions the table + injects ${UC_TEST_DATA}.
+# description: catalog-managed (CMT) checkpoint variant -- unity_catalog_checkpoint_table forwarding against a SINGLE catalog-managed table (duck.cmt.{UC_TEST_TABLE}) -- error cases, then checkpoint via FQ / USE-cat+qualified / USE-cat + bare / USE-cat.schema + bare, advancing one version between each, then assert the checkpoint files landed under the cmt schema dir. Reuses id_name (no bespoke tables). The cmt half of the contrast with table-plain/checkpoint. Paired checkpoint.py provisions the table + injects {UC_TEST_DATA}.
 # group: [oss_local]
 
 require parquet
@@ -25,7 +25,7 @@ CREATE SECRET (
 );
 
 statement ok
-ATTACH '${UC_TEST_CATALOG}' AS my_catalog (TYPE unity_catalog, DEFAULT_SCHEMA 'cmt');
+ATTACH '{UC_TEST_CATALOG}' AS my_catalog (TYPE unity_catalog, DEFAULT_SCHEMA 'cmt');
 
 # -----------------------------------------------------------------------------
 # Error cases BEFORE any USE (they depend on no default catalog being set)
@@ -39,13 +39,13 @@ Unsupported
 
 # bare table, no catalog default
 statement error
-CALL unity_catalog_checkpoint_table('${UC_TEST_TABLE}');
+CALL unity_catalog_checkpoint_table('{UC_TEST_TABLE}');
 ----
 No catalog specified
 
 # schema-qualified, still no catalog default
 statement error
-CALL unity_catalog_checkpoint_table('cmt.${UC_TEST_TABLE}');
+CALL unity_catalog_checkpoint_table('cmt.{UC_TEST_TABLE}');
 ----
 No catalog specified
 
@@ -56,14 +56,14 @@ No catalog specified
 
 # v1 -- fully qualified
 statement ok
-INSERT INTO my_catalog.cmt.${UC_TEST_TABLE} VALUES (1, 'a');
+INSERT INTO my_catalog.cmt.{UC_TEST_TABLE} VALUES (1, 'a');
 
 statement ok
-CALL unity_catalog_checkpoint_table('my_catalog.cmt.${UC_TEST_TABLE}');
+CALL unity_catalog_checkpoint_table('my_catalog.cmt.{UC_TEST_TABLE}');
 
 # v2 -- USE catalog + schema-qualified remainder
 statement ok
-INSERT INTO my_catalog.cmt.${UC_TEST_TABLE} VALUES (2, 'b');
+INSERT INTO my_catalog.cmt.{UC_TEST_TABLE} VALUES (2, 'b');
 
 statement ok
 USE my_catalog;
@@ -76,24 +76,24 @@ CALL unity_catalog_checkpoint_table('');
 empty
 
 statement ok
-CALL unity_catalog_checkpoint_table('cmt.${UC_TEST_TABLE}');
+CALL unity_catalog_checkpoint_table('cmt.{UC_TEST_TABLE}');
 
 # v3 -- USE catalog + bare name (DEFAULT_SCHEMA = cmt)
 statement ok
-INSERT INTO my_catalog.cmt.${UC_TEST_TABLE} VALUES (3, 'c');
+INSERT INTO my_catalog.cmt.{UC_TEST_TABLE} VALUES (3, 'c');
 
 statement ok
-CALL unity_catalog_checkpoint_table('${UC_TEST_TABLE}');
+CALL unity_catalog_checkpoint_table('{UC_TEST_TABLE}');
 
 # v4 -- USE catalog.schema + bare name
 statement ok
-INSERT INTO my_catalog.cmt.${UC_TEST_TABLE} VALUES (4, 'd');
+INSERT INTO my_catalog.cmt.{UC_TEST_TABLE} VALUES (4, 'd');
 
 statement ok
 USE my_catalog.cmt;
 
 statement ok
-CALL unity_catalog_checkpoint_table('${UC_TEST_TABLE}');
+CALL unity_catalog_checkpoint_table('{UC_TEST_TABLE}');
 
 # -----------------------------------------------------------------------------
 # Each of the 4 forced checkpoints wrote a <version>.checkpoint.parquet under the
@@ -105,11 +105,11 @@ CALL unity_catalog_checkpoint_table('${UC_TEST_TABLE}');
 #
 
 query I
-SELECT count(*) FROM glob('${UC_TEST_DATA}/duck/cmt/**/*.checkpoint.parquet');
+SELECT count(*) FROM glob('{UC_TEST_DATA}/duck/cmt/**/*.checkpoint.parquet');
 ----
 4
 
 query I
-SELECT count(*) FROM glob('${UC_TEST_DATA}/duck/cmt/**/_last_checkpoint');
+SELECT count(*) FROM glob('{UC_TEST_DATA}/duck/cmt/**/_last_checkpoint');
 ----
 1

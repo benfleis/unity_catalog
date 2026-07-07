@@ -1,33 +1,25 @@
 """Shared read/write driver for rw.test (same-stem pairing).
 
 The data behavior (write -> read-back -> metadata) is IDENTICAL for catalog-managed
-(duck.cmt) and plain (duck.plain) tables -- that's the invariant. So ONE
-parametrized driver + ONE body (rw.test, keyed on ${UC_TEST_SCHEMA}) covers both,
-instead of duplicating the round-trip per table type. The table-type-specific protocol
-assertions (does reading call LoadTable / writing call UpdateTable?) are isolated in
+(managed storage -> duck.cmt) and plain (external storage -> duck.plain) tables -- that's
+the invariant. So ONE body (rw.test, keyed on ${UC_TEST_SCHEMA}/${UC_TEST_TABLE}) covers
+both, fanned out declaratively by @requires_matrix over the storage axis instead of an
+imperative parametrize + manual `uctl` seeding. The table-type-specific protocol
+assertions (does reading call LoadTable / writing call UpdateTable?) stay isolated in
 table-cmt/ and table-plain/.
 
-Server-only resource (uc_server fixture, from oss_local/conftest.py); the table is
-seeded imperatively via `uctl` in the right schema per parameter.
+Each cell is an independent pytest item (test_rw[managed] / test_rw[external]) carrying
+its own @requires; the OSS provisioner instantiates a unique empty `id_name_rw_<token>`
+in the mapped schema (managed->cmt, external->plain) and injects
+UC_TEST_CATALOG/SCHEMA/TABLE into resources.env. Server-only resource (uc_server fixture,
+from oss_local/conftest.py); the `oss_local` mark tags the cells for `-m oss_local`.
 """
 
-import pytest
-
-from driver import run_paired, step
-
-from uc import uctl  # uc_server fixture comes from oss_local/conftest.py
-
-TABLE = "id_name"
-COLUMNS = "id INT, name STRING"
+from driver import Fixture, requires_matrix, run_paired
 
 
-@pytest.mark.parametrize("schema", ["cmt", "plain"])
-def test_rw(request, uc_server, schema):
-    with step(f"ensuring seed table duck.{schema}.{TABLE}"):
-        uctl("drop", schema, TABLE, check=False)  # idempotent clean slate
-        uctl("create", schema, TABLE, COLUMNS)
-    try:
-        run_paired(request, env={"UC_TEST_SCHEMA": schema})
-    finally:
-        with step(f"dropping seed table duck.{schema}.{TABLE}"):
-            uctl("drop", schema, TABLE, check=False)
+@requires_matrix(source=Fixture("id_name").Seed(None), access="rw",
+                 properties={"storage": ["managed", "external"]},
+                 marks=["oss_local"])
+def test_rw(request, uc_server, resources):
+    run_paired(request, env=resources.env)

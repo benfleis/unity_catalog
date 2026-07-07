@@ -25,6 +25,9 @@ def pytest_configure(config):
     the uc_server fixture + uctl.
     """
     register_provisioner(config, OssProvisioner(config), scope=_OSS_DIR)
+    config.addinivalue_line(
+        "markers", "oss_local: OSS-local UC tests (uc_server container)."
+    )
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -45,6 +48,7 @@ def pytest_collection_modifyitems(items):
     races `docker run --name uc-duck` across workers.
     """
     mark = pytest.mark.xdist_group("oss_uc_server")
+    oss_local = pytest.mark.oss_local
     for item in items:
         path = getattr(item, "path", None)
         if path is None:
@@ -54,6 +58,7 @@ def pytest_collection_modifyitems(items):
         except ValueError:
             continue
         item.add_marker(mark)
+        item.add_marker(oss_local)  # so `-m oss_local` selects the whole subtree, not just matrix cells
 
 
 @pytest.fixture(autouse=True)

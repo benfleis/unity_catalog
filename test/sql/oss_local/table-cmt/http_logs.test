@@ -1,5 +1,5 @@
 # name: test/sql/oss_local/table-cmt/http_logs.test
-# description: HTTP prefetch logging against the OSS UC ducklabs image -- querying through an attached catalog emits unity-catalog API requests visible via duckdb_logs_parsed('HTTP'). Ports the old http_logs.test. Paired http_logs.py provisions a unique empty duck.cmt.${UC_TEST_TABLE}.
+# description: HTTP prefetch logging against the OSS UC ducklabs image -- querying through an attached catalog emits unity-catalog API requests visible via duckdb_logs_parsed('HTTP'). Ports the old http_logs.test. Paired http_logs.py provisions a unique empty duck.cmt.{UC_TEST_TABLE}.
 # group: [oss_local]
 
 require parquet
@@ -27,11 +27,11 @@ CREATE SECRET (
 
 # Catalog Secret
 statement ok
-ATTACH '${UC_TEST_CATALOG}' AS my_catalog (TYPE unity_catalog, DEFAULT_SCHEMA 'cmt');
+ATTACH '{UC_TEST_CATALOG}' AS my_catalog (TYPE unity_catalog, DEFAULT_SCHEMA 'cmt');
 
 # Querying drives unity-catalog API calls (the http prefetch); id_name is seeded empty.
 query I
-SELECT count(*) FROM my_catalog.cmt.${UC_TEST_TABLE};
+SELECT count(*) FROM my_catalog.cmt.{UC_TEST_TABLE};
 ----
 0
 

@@ -70,7 +70,7 @@ def _default_schema_for(specs):
     """DEFAULT_SCHEMA to ATTACH: first rw spec's storage mapped to its schema, else cmt."""
     for s in specs:
         if s.access == "rw":
-            return _storage_to_schema(s.storage)
+            return _storage_to_schema(s.property("storage"))
     return "cmt"
 
 
@@ -107,7 +107,7 @@ class OssProvisioner:
                 if isinstance(s.source, Fixture):
                     b.plan.append(
                         f"instantiate fixture {s.source.name!r} -> "
-                        f"{_storage_to_schema(s.storage)} ({s.access})"
+                        f"{_storage_to_schema(s.property('storage'))} ({s.access})"
                     )
             if not any(isinstance(s.source, Fixture) for s in specs):
                 for schema in server._SEED_SCHEMAS:
@@ -135,7 +135,7 @@ class OssProvisioner:
         for s in specs:
             if not isinstance(s.source, Fixture):
                 continue
-            schema = _storage_to_schema(s.storage)
+            schema = _storage_to_schema(s.property("storage"))
             name = self._instantiate(duckdb_bin, s, schema, token, b)
             if s.access == "rw" and primary is None:
                 primary = (schema, name)

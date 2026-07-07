@@ -14,6 +14,6 @@ AND resources (the per-test table, dropped on teardown).
 from driver import Fixture, requires, run_paired
 
 
-@requires(source=Fixture("id_name").Seed(None), access="rw", commit="cmt", storage="managed")
+@requires(source=Fixture("id_name").Seed(None), access="rw", properties={"commit": "cmt", "storage": "managed"})
 def test_checkpoint(request, uc_server, resources):
     run_paired(request, env={**resources.env, "UC_TEST_DATA": uc_server.data_dir})

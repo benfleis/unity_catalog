@@ -11,6 +11,6 @@ teardown.
 from driver import Fixture, requires, run_paired
 
 
-@requires(source=Fixture("id_name").Seed(None), access="rw", commit="cmt", storage="managed")
+@requires(source=Fixture("id_name").Seed(None), access="rw", properties={"commit": "cmt", "storage": "managed"})
 def test_catalog_managed(request, uc_server, resources):
     run_paired(request, env=resources.env)

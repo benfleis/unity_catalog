@@ -43,15 +43,23 @@ _GEN_DIR = os.path.join(_REPO_ROOT, "scripts", "databricks_data_gen")
 if _GEN_DIR not in sys.path:
     sys.path.insert(0, _GEN_DIR)
 
-# Reuse the generator's table_props / build_create_sql / S3 layout verbatim so
-# emitted DDL matches the proven bulk path; copy_one_table is the single-table
-# provision path. Heavy deps (databricks.connect) are imported lazily inside those
-# functions' get_spark_session(), so importing the module is cheap and safe in
-# environments without databricks-connect (e.g. --provision-dry-run).
-import generate_databricks_test_data as gen  # noqa: E402
+# Reuse the generator's table_props / build_create_sql / S3 layout verbatim so emitted
+# DDL matches the proven bulk path. The generator imports heavy/disallowed deps at its top
+# (databricks.connect, duckdb, pandas -- python-duckdb is banned here), so importing it is
+# NOT cheap: do it LAZILY, only on a real databricks provision, so test COLLECTION never
+# pulls those in (a bare `pytest`/`--co` under testpaths=test imports this conftest). (#2
+# will drop the generator's python-duckdb use via the duckdb-CLI middleman.)
+_gen = None
 
-CATALOG_MANAGED = gen.CATALOG_MANAGED
-S3_BUCKET = gen.S3_BUCKET
+
+def _generator():
+    """Lazily import + cache the databricks data-generator (heavy deps, see above)."""
+    global _gen
+    if _gen is None:
+        import generate_databricks_test_data  # noqa: E402  (deferred: see _generator docstring)
+
+        _gen = generate_databricks_test_data
+    return _gen
 
 
 @dataclass
@@ -154,18 +162,19 @@ def _provision_command(catalog, cell, source_fqn, dest_table, commit, storage):
 
 def _build_table_sql(catalog, cell, source_fqn, dest_table, commit, storage):
     """CREATE OR REPLACE TABLE SQL for one rw table covering the full 2x2."""
+    gen = _generator()
     full = f"{catalog}.{cell}.{dest_table}"
-    location = f"s3://{S3_BUCKET}/{catalog}/{cell}/{dest_table}"
+    location = f"s3://{gen.S3_BUCKET}/{catalog}/{cell}/{dest_table}"
 
     if commit == "cmt" and storage == "managed":
         # Proven generator path: catalog-managed props, no LOCATION.
-        return gen.build_create_sql(full, location, source_fqn, [CATALOG_MANAGED])
+        return gen.build_create_sql(full, location, source_fqn, [gen.CATALOG_MANAGED])
 
     # General path: choose props + LOCATION explicitly (the generator's builder
     # couples no-LOCATION to catalog-managed, so build it here for the other cells).
     props = {}
     if commit == "cmt":
-        props.update(gen.table_props[CATALOG_MANAGED])
+        props.update(gen.table_props[gen.CATALOG_MANAGED])
     location_clause = (
         "" if storage == "managed" else f"\n            LOCATION '{location}'"
     )
@@ -262,7 +271,7 @@ class DatabricksProvisioner:
         spark = None
         if not dry_run:
             with step("connecting to Databricks (serverless)"):
-                spark = gen.get_spark_session()  # creds ensured via ensure_env() above
+                spark = _generator().get_spark_session()  # creds ensured via ensure_env() above
 
         cell_for_default = None
         for spec in specs:
@@ -276,7 +285,7 @@ class DatabricksProvisioner:
                 continue
 
             # rw: cell-encoded isolation schema + single-table clone with cell props.
-            cell = cell_schema_name(spec.commit, spec.storage, token)
+            cell = cell_schema_name(spec.property("commit"), spec.property("storage"), token)
             if cell not in bindings.cell_schemas:
                 bindings.cell_schemas.append(cell)
             if cell_for_default is None:
@@ -284,11 +293,11 @@ class DatabricksProvisioner:
 
             full = f"{cat}.{cell}.{bare}"
             cmd = _provision_command(
-                cat, cell, source_fqn, bare, spec.commit, spec.storage
+                cat, cell, source_fqn, bare, spec.property("commit"), spec.property("storage")
             )
             create_schema_sql = f"CREATE SCHEMA IF NOT EXISTS {cat}.{cell}"
             create_table_sql = _build_table_sql(
-                cat, cell, source_fqn, bare, spec.commit, spec.storage
+                cat, cell, source_fqn, bare, spec.property("commit"), spec.property("storage")
             )
 
             bindings.tables.append(TableBinding(bare, full, "rw"))
@@ -298,7 +307,7 @@ class DatabricksProvisioner:
 
             if not dry_run:
                 with step(
-                    f"clone {source_fqn} -> {full} ({spec.commit}/{spec.storage})"
+                    f"clone {source_fqn} -> {full} ({spec.property('commit')}/{spec.property('storage')})"
                 ):
                     spark.sql(create_schema_sql)
                     spark.sql(create_table_sql)
