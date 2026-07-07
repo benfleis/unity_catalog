@@ -44,11 +44,11 @@ if _GEN_DIR not in sys.path:
     sys.path.insert(0, _GEN_DIR)
 
 # Reuse the generator's table_props / build_create_sql / S3 layout verbatim so emitted
-# DDL matches the proven bulk path. The generator imports heavy/disallowed deps at its top
-# (databricks.connect, duckdb, pandas -- python-duckdb is banned here), so importing it is
-# NOT cheap: do it LAZILY, only on a real databricks provision, so test COLLECTION never
-# pulls those in (a bare `pytest`/`--co` under testpaths=test imports this conftest). (#2
-# will drop the generator's python-duckdb use via the duckdb-CLI middleman.)
+# DDL matches the proven bulk path. The generator imports heavy deps at its top
+# (databricks.connect, pandas), so importing it is NOT cheap: do it LAZILY, only on a real
+# databricks provision, so test COLLECTION never pulls those in (a bare `pytest`/`--co`
+# under testpaths=test imports this conftest). The generator no longer uses python-duckdb
+# (a banned dep) -- it shells out to the duckdb CLI -- so that's gone from this path.
 _gen = None
 
 

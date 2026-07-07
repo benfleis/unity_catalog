@@ -23,11 +23,12 @@
 #   DATABRICKS_TOKEN
 #   DATABRICKS_ENDPOINT
 #
-# from-duckdb-sql flow:
-#   1. Executes the SQL file in DuckDB (can define multiple tables)
-#   2. Every table in DuckDB's in-memory session gets exported to a local parquet file
+# from-duckdb-sql flow (via the DuckDB CLI -- no python-duckdb dependency):
+#   1. Executes the SQL file through the duckdb CLI into a throwaway db (can define multiple tables)
+#   2. Every table is exported to a local parquet file via the CLI (COPY ... TO)
 #   3. The parquet is read into pandas and pushed to Databricks as a Spark DataFrame (via gRPC, no S3 staging)
 #   4. A Delta table is created at s3://<S3_BUCKET>/<dest_catalog>/<dest_schema>/<table>
+#   The CLI is $DUCKDB_BIN, else $BUILD_DIR/duckdb, else `duckdb` on PATH.
 #
 # from-custom-sql flow:
 #   1. The SQL file contains the full CREATE TABLE statement with {table_name} and {location} placeholders
@@ -39,10 +40,11 @@
 
 import os
 import sys
+import json
 import argparse
+import subprocess
 import tempfile
 from databricks.connect import DatabricksSession
-import duckdb
 import pandas as pd
 
 
@@ -178,32 +180,65 @@ def copy_tables(source, destination, dry_run=False, prop_sets=None):
             spark.sql(create_sql)
 
 
+def _duckdb_bin():
+    """Locate the DuckDB CLI -- the middleman, so this script has NO python-duckdb dep.
+
+    Honors $DUCKDB_BIN, then $BUILD_DIR/duckdb, else `duckdb` on PATH.
+    """
+    explicit = os.environ.get("DUCKDB_BIN")
+    if explicit:
+        return explicit
+    build_dir = os.environ.get("BUILD_DIR")
+    if build_dir:
+        candidate = os.path.join(build_dir, "duckdb")
+        if os.path.isfile(candidate):
+            return candidate
+    return "duckdb"
+
+
+def _duckdb(db_path, sql, *, json_rows=False):
+    """Run one SQL against `db_path` via the DuckDB CLI (-unsigned == allow_unsigned_extensions).
+
+    Returns parsed JSON rows when json_rows=True, else raw stdout. Raises on non-zero exit.
+    """
+    args = [_duckdb_bin(), "-unsigned"]
+    if json_rows:
+        args.append("-json")
+    args += [db_path, "-c", sql]
+    proc = subprocess.run(args, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"DuckDB CLI failed ({args[0]} -unsigned ... -c <sql>):\n{proc.stderr.strip()}")
+    out = proc.stdout.strip()
+    return (json.loads(out) if out else []) if json_rows else out
+
+
 def duckdb_sql_to_tables(sql_file, destination, dry_run=False, prop_sets=None):
-    """Run sql_file in DuckDB, push each table to Databricks via pandas, create Delta tables in Databricks."""
+    """Run sql_file through the DuckDB CLI, export each table to parquet, push to Databricks via pandas."""
     prop_sets = prop_sets or []
     dest_catalog, dest_schema = destination.split(".")
 
     with open(sql_file) as f:
         sql = f.read()
 
-    con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
-    con.execute(sql)
-
-    tables = [row[0] for row in con.execute("SHOW TABLES").fetchall()]
-    if not tables:
-        print("No tables found in DuckDB after executing SQL file.")
-        return
-
-    print(f"Found tables: {tables}")
-
-    spark = get_spark_session()
-    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {dest_catalog}.{dest_schema}")
-
     with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "gen.duckdb")
+        _duckdb(db_path, sql)  # instantiate the SQL file's tables into a throwaway db
+
+        tables = [row["name"] for row in _duckdb(db_path, "SHOW TABLES", json_rows=True)]
+        if not tables:
+            print("No tables found in DuckDB after executing SQL file.")
+            return
+
+        print(f"Found tables: {tables}")
+
+        spark = get_spark_session()
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {dest_catalog}.{dest_schema}")
+
         for table_name in tables:
             parquet_path = os.path.join(tmpdir, f"{table_name}.parquet")
-            con.execute(
-                f"COPY (SELECT * FROM {table_name}) TO '{parquet_path}' (FORMAT parquet)"
+            _duckdb(
+                db_path,
+                f"COPY (SELECT * FROM {table_name}) TO '{parquet_path}' (FORMAT parquet)",
             )
             print(f"  Exported '{table_name}' -> {parquet_path}")
 
