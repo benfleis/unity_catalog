@@ -1,5 +1,5 @@
 # name: test/sql/oss_local/default_schema.test
-# description: NEGATIVE TEST -- OSS UC exposes no default namespace, so a UC catalog attached without DEFAULT_SCHEMA has no auto-detected default schema, and reads fail (even fully qualified) with "auto-detection of default schema failed". KEEP until default-schema auto-detection is implemented, then flip to a positive case. Paired default_schema.py declares the server (uc_server) and seeds duck.cmt.id_name.
+# description: NEGATIVE TEST -- OSS UC exposes no default namespace, so a UC catalog attached without DEFAULT_SCHEMA has no auto-detected default schema, and reads fail (even fully qualified) with "auto-detection of default schema failed". KEEP until default-schema auto-detection is implemented, then flip to a positive case. Paired default_schema.py declares the server (uc_server) and provisions a unique empty duck.cmt.${UC_TEST_TABLE}.
 # group: [oss_local]
 
 require parquet
@@ -11,6 +11,8 @@ require delta
 require httpfs
 
 require-env UC_TEST_CATALOG
+
+require-env UC_TEST_TABLE
 
 statement ok
 CREATE SECRET (
@@ -28,6 +30,6 @@ ATTACH '${UC_TEST_CATALOG}' (TYPE unity_catalog);
 # companion attach/read/write tests show the same access succeeds once DEFAULT_SCHEMA
 # is supplied; this asserts the gap until auto-detection lands.
 statement error
-FROM duck.cmt.id_name;
+FROM duck.cmt.${UC_TEST_TABLE};
 ----
 Default schema for catalog 'duck' not found. This means auto-detection of default schema failed.

@@ -76,6 +76,7 @@ static string MakeRequest(ClientContext &ctx, const string &url, const string &t
 	AuthenticateViaBearerToken(hdrs, token);
 	// TODO: conditional set if not override?
 	hdrs.Insert("Content-Type", "application/json");
+	hdrs["User-Agent"] = "Spark/3.5.3 Delta/3.3.0 Java/17.0.10 Scala/2.12.18";
 
 	unique_ptr<HTTPResponse> resp;
 	if (body.empty()) {

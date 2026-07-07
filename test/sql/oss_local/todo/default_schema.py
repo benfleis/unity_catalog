@@ -3,25 +3,14 @@
 OSS UC exposes no default namespace, so attaching a UC catalog WITHOUT DEFAULT_SCHEMA
 leaves auto-detection unable to resolve one; accessing a table through the catalog's
 implicit default schema then errors. Kept until default-schema auto-detection is
-supported (then flip to a positive no-DEFAULT_SCHEMA case). Seeds duck.cmt.id_name
-so the failure is unambiguously the default-schema resolution, not a missing table.
+supported (then flip to a positive no-DEFAULT_SCHEMA case). @requires provisions a unique
+empty duck.cmt.${UC_TEST_TABLE} so the failure is unambiguously the default-schema
+resolution, not a missing table. Depends on uc_server (session container) AND resources.
 """
 
-from driver import run_paired, step
-
-from uc import uctl  # uc_server fixture comes from oss_local/conftest.py
-
-SCHEMA = "cmt"
-TABLE = "id_name"
-COLUMNS = "id INT, name STRING"
+from driver import Fixture, requires, run_paired
 
 
-def test_default_schema(request, uc_server):
-    with step(f"ensuring seed table duck.{SCHEMA}.{TABLE}"):
-        uctl("drop", SCHEMA, TABLE, check=False)  # idempotent clean slate
-        uctl("create", SCHEMA, TABLE, COLUMNS)
-    try:
-        run_paired(request)
-    finally:
-        with step(f"dropping seed table duck.{SCHEMA}.{TABLE}"):
-            uctl("drop", SCHEMA, TABLE, check=False)
+@requires(source=Fixture("id_name").Seed(None), access="rw", commit="cmt", storage="managed")
+def test_default_schema(request, uc_server, resources):
+    run_paired(request, env=resources.env)

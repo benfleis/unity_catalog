@@ -1,31 +1,16 @@
 """Driver for catalog_managed.test (same-stem pairing -> one test).
 
-Declares the running OSS UC server as a resource via the `uc_server` fixture
-(test/py/uc/server.py) -- our first require/resource declaration. Resource scope is
-*server only*: the catalog-managed table the body reads/writes is seeded imperatively
-here via `uctl` (not yet modeled as its own resource).
-
-Lifecycle: uc_server (session) stands up a fresh ducklabs server -> this driver seeds a
-clean duck.cmt.id_name -> run_paired runs the .test body through the unittest binary
--> table dropped -> (session end) server torn down.
+Declarative, mirroring the Databricks path: @requires(Fixture("id_name").Seed(None))
+asks the generic `resources` fixture -> OssProvisioner to instantiate a unique per-test
+EMPTY table `id_name_rw_<token>` in the cmt (catalog-managed) schema, and injects its
+name into the body as ${UC_TEST_TABLE}. `.Seed(None)` because the body does its own
+inserts. Depends on uc_server (the session container); the per-test table is dropped on
+teardown.
 """
 
-from driver import run_paired, step
-
-from uc import uctl  # uc_server fixture comes from oss_local/conftest.py
-
-SCHEMA = "cmt"
-TABLE = "id_name"
-COLUMNS = "id INT, name STRING"
+from driver import Fixture, requires, run_paired
 
 
-def test_catalog_managed(request, uc_server):
-    # server-only resource: give the body a clean, empty catalog-managed table.
-    with step(f"ensuring seed table duck.{SCHEMA}.{TABLE}"):
-        uctl("drop", SCHEMA, TABLE, check=False)  # idempotent clean slate
-        uctl("create", SCHEMA, TABLE, COLUMNS)
-    try:
-        run_paired(request)
-    finally:
-        with step(f"dropping seed table duck.{SCHEMA}.{TABLE}"):
-            uctl("drop", SCHEMA, TABLE, check=False)
+@requires(source=Fixture("id_name").Seed(None), access="rw", commit="cmt", storage="managed")
+def test_catalog_managed(request, uc_server, resources):
+    run_paired(request, env=resources.env)

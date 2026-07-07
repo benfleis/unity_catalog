@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from driver import step  # high-level op logging (visible live under --steps)
+from driver import find_duckdb, step  # find_duckdb: resolve tools from one build
 
 # The generator + cleaner live in scripts/databricks_data_gen/. The conftest puts
 # `scripts` on sys.path; make this importable directly too so the engine is
@@ -231,6 +231,12 @@ def ensure_env(*, dry_run=False):
 class DatabricksProvisioner:
     """Concrete Provisioner (driver/provision.py) for Databricks Unity Catalog."""
 
+    def __init__(self, config=None):
+        # config lets make_init resolve the duckdb build dir from the SAME build the
+        # driver runs the unittest binary from (--build / $BUILD_DIR / --duckdb-bin),
+        # instead of a hardcoded build/release. See uc.oss.OssProvisioner.
+        self._config = config
+
     def provision(self, specs, token, *, dry_run=False, params=None) -> Bindings:
         """Provision fixtures for `specs` under `token`. See module docstring.
 
@@ -337,15 +343,17 @@ class DatabricksProvisioner:
         """duckdb init SQL for `duckdb -unsigned -init`.
 
         Mirrors write_catalog_managed.test: LOAD local extensions, CREATE SECRET,
-        ATTACH the catalog with the cell as DEFAULT_SCHEMA, USE it. Extension paths
-        resolve from BUILD_DIR (default build/release) — same layout as provision_cli.
-        Secrets are baked concretely for the real launch; pass redact=True (used by
-        --provision-dry-run, which prints this) to mask the token so it never hits
-        the terminal/logs.
+        ATTACH the catalog with the cell as DEFAULT_SCHEMA, USE it. Extension paths come
+        from the SAME build as the resolved tools (find_duckdb); redact=True (used by
+        --provision-dry-run, which prints this without launching) falls back to the
+        env/default so it needs no built binary, and masks the token.
         """
-        build_dir = os.environ.get(
-            "BUILD_DIR", os.path.join(_REPO_ROOT, "build", "release")
-        )
+        if redact:
+            # dry-run print: must not require a built binary.
+            build_dir = os.environ.get("BUILD_DIR", os.path.join(_REPO_ROOT, "build", "release"))
+        else:
+            wd = getattr(self._config, "sqllogic_working_dir", None) or os.getcwd()
+            build_dir = os.path.dirname(find_duckdb(self._config, wd))
 
         def ext(name):
             return os.path.join(

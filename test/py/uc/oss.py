@@ -1,31 +1,45 @@
-"""OSS UC provisioner for the --repl flow (sibling of uc.databricks.DatabricksProvisioner).
+"""OSS UC provisioner (sibling of uc.databricks.DatabricksProvisioner).
 
---repl ONLY today -- the run path uses the uc_server fixture + uctl seeding (see
-test/sql/oss_local/). With NO @requires this still yields a useful REPL: a fresh
-container + the locally-built extensions loaded + the `duck` catalog attached.
-@requires(storage=managed|external) just selects which schema to ATTACH as the default
-(the storage axis values map onto schemas: managed -> cmt, external -> plain).
+Serves BOTH the driver's generic `resources` fixture (the run path) and `--repl`:
 
-Note: OSS has no clone-from-source step (uctl creates EMPTY tables and @requires carries
-no column spec), so this does NOT seed per-spec tables. The REPL attaches `duck`; create
-or seed interactively (SQL) or from another shell via `uctl create <schema> <table>
-"<cols>"`. That's the deliberate difference from DatabricksProvisioner, which clones a
-premade source table.
+  * RUN path (a session `uc_server` is active): reuse that container and INSTANTIATE
+    each `@requires(source=Fixture(...))` as a table via the duckdb middleman
+    (load -> canonicalize -> map to UC types -> `uctl create`). rw specs get a unique
+    per-test table `<name>_rw_<token>` (dropped on teardown); ro specs get a shared
+    table created once per session. The body reads the rw table via ${UC_TEST_TABLE}.
+
+  * --repl (no fixtures run, so the provisioner owns the container): start a fresh
+    container and seed the legacy playground table `id_name` in both schemas. Unchanged.
+
+The `storage` axis maps onto ducklabs' seeded schema names (managed -> cmt, external ->
+plain). Seed-data insertion into UC is not wired yet, so seeded fixtures must use
+`Fixture(...).Seed(None)` (empty table; the body does its own inserts) for now.
 """
 
 import os
 from dataclasses import dataclass, field
+
+from duckdb_pytest_driver import Fixture, find_duckdb
+from duckdb_pytest_driver.fixtures import canonicalize, load_fixture, map_columns, resolve_seed
 
 from uc import REPO_ROOT, server, uctl
 
 # Locally-built extensions the body needs; LOADed by full path (duckdb -unsigned).
 _EXTS = ("parquet", "httpfs", "delta", "unity_catalog")
 
-# OSS test convention: one small table seeded in each schema so a --repl session has the
-# shape the tests use. @requires carries no columns and OSS has no clone-from-source, so
-# the shape is fixed here (matches the rw/contrast drivers).
+# Legacy --repl playground table (fixed shape), seeded in each schema for interactive use.
 _SEED_TABLE = "id_name"
 _SEED_COLUMNS = "id INT, name STRING"
+
+# Fixture root (uc-module-generic, shared by oss + databricks).
+_FIXTURES = REPO_ROOT / "test" / "fixtures"
+
+# DuckDB logical types -> UC/Spark types for `uctl create` column specs.
+UC_TYPE_MAP = {
+    "INTEGER": "INT", "BIGINT": "BIGINT", "SMALLINT": "SMALLINT", "TINYINT": "TINYINT",
+    "VARCHAR": "STRING", "DOUBLE": "DOUBLE", "FLOAT": "FLOAT", "BOOLEAN": "BOOLEAN",
+    "DATE": "DATE", "TIMESTAMP": "TIMESTAMP", "DECIMAL": "DECIMAL",
+}
 
 
 @dataclass
@@ -35,10 +49,11 @@ class OssBindings:
     catalog: str
     default_schema: str
     token: str
-    data_dir: str = None  # container's host bind-mount (None on dry_run)
+    data_dir: str = None  # container's host bind-mount (only when we own the container)
     seeded: list = field(default_factory=list)  # (schema, table) pairs to drop on teardown
     env: dict = field(default_factory=dict)
     plan: list = field(default_factory=list)
+    owns_container: bool = False  # True only on the --repl path (we started the container)
 
 
 # The generic @requires(storage=...) axis carries the framework values
@@ -52,11 +67,7 @@ def _storage_to_schema(storage):
 
 
 def _default_schema_for(specs):
-    """DEFAULT_SCHEMA to ATTACH: first rw spec's storage mapped to its schema, else cmt.
-
-    OSS maps the `storage` axis onto the seeded schema name (managed -> cmt, the
-    catalog-managed schema; external -> plain) -- see scripts/oss_uc_image/uctl.
-    """
+    """DEFAULT_SCHEMA to ATTACH: first rw spec's storage mapped to its schema, else cmt."""
     for s in specs:
         if s.access == "rw":
             return _storage_to_schema(s.storage)
@@ -66,51 +77,124 @@ def _default_schema_for(specs):
 class OssProvisioner:
     """Provisioner protocol impl (driver/provision.py) for the OSS UC ducklabs container."""
 
+    def __init__(self, config=None):
+        # config lets us resolve the duckdb CLI from the SAME build the driver runs the
+        # unittest binary from (--build / $BUILD_DIR / --unittest-binary), not a fixed path.
+        self._config = config
+        # (schema, table) of shared ro tables created this session (created once).
+        self._shared_ro = set()
+
+    def _duckdb_cli(self):
+        """The duckdb CLI from the same build the driver resolves the unittest binary from."""
+        wd = getattr(self._config, "sqllogic_working_dir", None) or os.getcwd()
+        return find_duckdb(self._config, wd)
+
     def provision(self, specs, token, *, dry_run=False, params=None) -> OssBindings:
         os.environ.setdefault("UC_TEST_CATALOG", server._CATALOG)  # "duck"
         catalog = os.environ["UC_TEST_CATALOG"]
-        # A parametrized test's `schema` param (e.g. test_rw[cmt]) picks the REPL
-        # context; else fall back to the first rw @requires storage, else cmt.
+        # A parametrized test's `schema` param picks the REPL context; else first rw
+        # @requires storage, else cmt.
         default_schema = (params or {}).get("schema")
         if default_schema not in server._SEED_SCHEMAS:
             default_schema = _default_schema_for(specs)
 
         b = OssBindings(catalog=catalog, default_schema=default_schema, token=token)
-        b.plan.append(f"start OSS UC container {server.IMAGE} on {server.ENDPOINT}")
-        for schema in server._SEED_SCHEMAS:
-            b.plan.append(f'uctl create {schema} {_SEED_TABLE} "{_SEED_COLUMNS}"')
-        b.plan.append(
-            f"ATTACH '{catalog}' AS duck (TYPE unity_catalog, DEFAULT_SCHEMA '{default_schema}')"
-        )
         b.env = {"UC_TEST_CATALOG": catalog, "UC_TEST_SCHEMA": default_schema}
 
-        if not dry_run:
+        if dry_run:
+            b.plan.append(f"start OSS UC container {server.IMAGE} on {server.ENDPOINT}")
+            for s in specs:
+                if isinstance(s.source, Fixture):
+                    b.plan.append(
+                        f"instantiate fixture {s.source.name!r} -> "
+                        f"{_storage_to_schema(s.storage)} ({s.access})"
+                    )
+            if not any(isinstance(s.source, Fixture) for s in specs):
+                for schema in server._SEED_SCHEMAS:
+                    b.plan.append(f'uctl create {schema} {_SEED_TABLE} "{_SEED_COLUMNS}"')
+            b.plan.append(f"ATTACH '{catalog}' AS duck (DEFAULT_SCHEMA '{default_schema}')")
+            print("provision plan (NO container started):")
+            for line in b.plan:
+                print(f"  {line}")
+            return b
+
+        if server.active_server() is None:
+            # --repl path: own a fresh container + seed the legacy playground (unchanged).
+            b.owns_container = True
             srv = server.start_container()
             b.data_dir = srv.data_dir
-            # Seed the convention table in BOTH schemas so the REPL matches any OSS test
-            # (cmt = catalog-managed, plain) -- --repl can't see the
-            # parametrized [cmt]/[plain] selection, so provide both.
             for schema in server._SEED_SCHEMAS:
                 uctl("drop", schema, _SEED_TABLE, check=False)  # idempotent clean slate
                 uctl("create", schema, _SEED_TABLE, _SEED_COLUMNS)
                 b.seeded.append((schema, _SEED_TABLE))
-        else:
-            print("provision plan (NO container started):")
-            for line in b.plan:
-                print(f"  {line}")
+            return b
+
+        # RUN path: reuse the session container; instantiate each Fixture spec as a table.
+        duckdb_bin = self._duckdb_cli()
+        primary = None
+        for s in specs:
+            if not isinstance(s.source, Fixture):
+                continue
+            schema = _storage_to_schema(s.storage)
+            name = self._instantiate(duckdb_bin, s, schema, token, b)
+            if s.access == "rw" and primary is None:
+                primary = (schema, name)
+        if primary:
+            b.default_schema, table = primary
+            b.env = {
+                "UC_TEST_CATALOG": catalog,
+                "UC_TEST_SCHEMA": b.default_schema,
+                "UC_TEST_TABLE": table,
+            }
         return b
 
+    def _instantiate(self, duckdb_bin, spec, schema, token, b) -> str:
+        """Create one table for `spec` in `schema`; return its name.
+
+        rw -> a unique per-test `<name>_rw_<token>` (dropped on teardown); ro -> a shared
+        table created ONCE per session (guarded; left for the session).
+        """
+        definition = load_fixture(spec.source, [str(_FIXTURES)])
+        table = canonicalize(duckdb_bin, definition)
+        col_spec = ", ".join(f"{n} {t}" for n, t in map_columns(table, UC_TYPE_MAP))
+
+        if spec.access == "rw":
+            name = f"{spec.resolved_name()}_rw_{token}"
+        else:
+            name = spec.resolved_name()
+            if (schema, name) in self._shared_ro:
+                return name  # created earlier this session -> reuse (shared)
+
+        rows = resolve_seed(spec.source.seed, table.seed_data)
+        if rows:
+            raise NotImplementedError(
+                f"OSS seed-data insertion is not wired yet (fixture {name!r} would seed "
+                f"{len(rows)} rows). Use Fixture(...).Seed(None) for an empty table until "
+                "the UC insert path lands."
+            )
+        uctl("drop", schema, name, check=False)  # clean slate (rw) / first create (ro)
+        uctl("create", schema, name, col_spec)
+        if spec.access == "rw":
+            b.seeded.append((schema, name))  # per-test -> drop on teardown
+        else:
+            self._shared_ro.add((schema, name))  # shared -> created once, lives for session
+        return name
+
     def make_init(self, b: OssBindings, *, redact: bool = False) -> str:
-        """duckdb init SQL for `duckdb -unsigned -init`.
+        """duckdb init SQL for `duckdb -unsigned -init` (the --repl playground).
 
         LOAD local extensions, CREATE SECRET (the OSS token is the literal 'not-used',
         so nothing to redact), ATTACH duck with the chosen DEFAULT_SCHEMA, USE it.
-        Extension paths resolve from $BUILD_DIR (default build/release), matching
-        DatabricksProvisioner.make_init.
+        Extension paths come from the SAME build as the resolved tools (find_duckdb);
+        for --provision-dry-run (redact=True) we print without requiring a built binary.
         """
-        build_dir = os.environ.get(
-            "BUILD_DIR", os.path.join(str(REPO_ROOT), "build", "release")
-        )
+        if redact:
+            # dry-run print: must not require a built binary -> env/default (unchanged).
+            build_dir = os.environ.get("BUILD_DIR", os.path.join(str(REPO_ROOT), "build", "release"))
+        else:
+            # real launch: the duckdb CLI (hence its build dir) is a precondition here.
+            wd = getattr(self._config, "sqllogic_working_dir", None) or os.getcwd()
+            build_dir = os.path.dirname(find_duckdb(self._config, wd))
 
         def ext(name):
             return os.path.join(build_dir, "extension", name, f"{name}.duckdb_extension")
@@ -139,8 +223,8 @@ USE duck;
 """
 
     def teardown(self, token, bindings=None) -> None:
-        """Drop seeded tables, then stop the container (and clean its data dir)."""
+        """Drop per-test tables; stop the container only if THIS provision owned it (--repl)."""
         for schema, table in (getattr(bindings, "seeded", None) or []):
             uctl("drop", schema, table, check=False)
-        data_dir = getattr(bindings, "data_dir", None) if bindings else None
-        server.stop_container(data_dir)
+        if bindings and getattr(bindings, "owns_container", False):
+            server.stop_container(getattr(bindings, "data_dir", None))

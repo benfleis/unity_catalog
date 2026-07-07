@@ -1,5 +1,5 @@
 # name: test/sql/oss_local/table-cmt/catalog_managed.test
-# description: catalog-managed PROTOCOL contrast -- duck.cmt tables ARE catalog-managed, so reading calls LoadTable and writing calls UpdateTable (delta.yaml v1). The shared data round-trip lives in oss_local/rw.test; this asserts ONLY the protocol calls (the cmt half of the contrast with table-plain/catalog_managed). Paired catalog_managed.py seeds duck.cmt.id_name.
+# description: catalog-managed PROTOCOL contrast -- duck.cmt tables ARE catalog-managed, so reading calls LoadTable and writing calls UpdateTable (delta.yaml v1). The shared data round-trip lives in oss_local/rw.test; this asserts ONLY the protocol calls (the cmt half of the contrast with table-plain/catalog_managed). Paired catalog_managed.py provisions an empty duck.cmt.${UC_TEST_TABLE}.
 # group: [oss_local]
 
 require parquet
@@ -11,6 +11,8 @@ require delta
 require httpfs
 
 require-env UC_TEST_CATALOG
+
+require-env UC_TEST_TABLE
 
 statement ok
 CREATE SECRET (
@@ -27,16 +29,16 @@ statement ok
 CALL enable_logging(level='DEBUG');
 
 # -----------------------------------------------------------------------------
-# CMT read path: id_name carries delta.feature.catalogManaged, so InternalAttach
+# CMT read path: the table carries delta.feature.catalogManaged, so InternalAttach
 # calls LoadTable (delta.yaml v1 GET .../tables/{table}).
 #
 
 statement ok
-FROM duck.cmt.id_name;
+FROM duck.cmt.${UC_TEST_TABLE};
 
 query I
 SELECT count(*) > 0 FROM duckdb_logs()
-WHERE message LIKE 'uc-api.LoadTable duck.cmt.id_name%';
+WHERE message LIKE 'uc-api.LoadTable duck.cmt.${UC_TEST_TABLE}%';
 ----
 true
 
@@ -45,10 +47,10 @@ true
 #
 
 statement ok
-INSERT INTO duck.cmt.id_name VALUES (1, 'blabla');
+INSERT INTO duck.cmt.${UC_TEST_TABLE} VALUES (1, 'blabla');
 
 query I
 SELECT count(*) > 0 FROM duckdb_logs()
-WHERE message LIKE 'uc-api.UpdateTable duck.cmt.id_name%';
+WHERE message LIKE 'uc-api.UpdateTable duck.cmt.${UC_TEST_TABLE}%';
 ----
 true

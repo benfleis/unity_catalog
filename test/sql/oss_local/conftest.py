@@ -24,7 +24,7 @@ def pytest_configure(config):
     as the databricks provisioner (driver/provision.py). --repl only; the run path uses
     the uc_server fixture + uctl.
     """
-    register_provisioner(config, OssProvisioner(), scope=_OSS_DIR)
+    register_provisioner(config, OssProvisioner(config), scope=_OSS_DIR)
 
 
 @pytest.hookimpl(tryfirst=True)

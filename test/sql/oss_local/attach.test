@@ -1,5 +1,5 @@
 # name: test/sql/oss_local/attach.test
-# description: attach/detach/USE semantics for the unity_catalog extension against the OSS UC ducklabs image. Paired attach.py declares the server (uc_server) and seeds duck.cmt.id_name.
+# description: attach/detach/USE semantics for the unity_catalog extension against the OSS UC ducklabs image. Paired attach.py declares the server (uc_server) and provisions a unique empty duck.cmt.${UC_TEST_TABLE}.
 # group: [oss_local]
 
 require parquet
@@ -11,6 +11,8 @@ require delta
 require httpfs
 
 require-env UC_TEST_CATALOG
+
+require-env UC_TEST_TABLE
 
 statement ok
 CREATE SECRET (
@@ -56,9 +58,9 @@ USE duck;
 # Write a row through the catalog-managed path, then read it back (id_name is
 # seeded empty by attach.py).
 statement ok
-INSERT INTO id_name VALUES (2, 'two');
+INSERT INTO ${UC_TEST_TABLE} VALUES (2, 'two');
 
 query II
-SELECT id, name FROM id_name LIMIT 1;
+SELECT id, name FROM ${UC_TEST_TABLE} LIMIT 1;
 ----
 2	two

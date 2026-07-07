@@ -1,29 +1,15 @@
-"""Driver for table-plain/catalog_managed.test (same-stem pairing).
+"""Driver for table-plain/catalog_managed.test (same-stem pairing -> one test).
 
-The plain half of the catalog-managed PROTOCOL contrast: seeds an EXTERNAL table
-(duck.plain.id_name) and the body asserts reading does NOT call LoadTable and
-writing does NOT call UpdateTable (vs table-cmt/catalog_managed, which asserts they
-ARE called). The shared data round-trip is in oss_local/rw.test.
-
-Server-only resource (uc_server fixture, from oss_local/conftest.py); the table is
-seeded imperatively via `uctl`.
+The plain half of the catalog-managed PROTOCOL contrast: @requires provisions a unique
+empty EXTERNAL table (duck.plain.${UC_TEST_TABLE}) and the body asserts reading does
+NOT call LoadTable and writing does NOT call UpdateTable (vs table-cmt/catalog_managed,
+which asserts they ARE called). The shared data round-trip is in oss_local/rw.test.
+Depends on uc_server (session container) AND resources (the per-test table).
 """
 
-from driver import run_paired, step
-
-from uc import uctl  # uc_server fixture comes from oss_local/conftest.py
-
-SCHEMA = "plain"
-TABLE = "id_name"
-COLUMNS = "id INT, name STRING"
+from driver import Fixture, requires, run_paired
 
 
-def test_catalog_managed(request, uc_server):
-    with step(f"ensuring seed table duck.{SCHEMA}.{TABLE}"):
-        uctl("drop", SCHEMA, TABLE, check=False)  # idempotent clean slate
-        uctl("create", SCHEMA, TABLE, COLUMNS)
-    try:
-        run_paired(request)
-    finally:
-        with step(f"dropping seed table duck.{SCHEMA}.{TABLE}"):
-            uctl("drop", SCHEMA, TABLE, check=False)
+@requires(source=Fixture("id_name").Seed(None), access="rw", commit="plain", storage="external")
+def test_catalog_managed(request, uc_server, resources):
+    run_paired(request, env=resources.env)

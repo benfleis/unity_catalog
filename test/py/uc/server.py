@@ -125,6 +125,17 @@ def start_container():
     return UcServer(endpoint=ENDPOINT, container=CONTAINER, data_dir=data_dir)
 
 
+# Published while the session `uc_server` fixture holds the container. OssProvisioner
+# reads it to tell the RUN path (reuse this container, don't touch its lifecycle) from
+# the --repl path (no fixtures run, so the provisioner owns a fresh container itself).
+_ACTIVE_SERVER = None
+
+
+def active_server():
+    """The session container if `uc_server` is active, else None (e.g. the --repl path)."""
+    return _ACTIVE_SERVER
+
+
 def stop_container(data_dir=None):
     """Stop the OSS UC container (run used --rm, so stop removes it) + clean its data dir."""
     with step("stopping OSS UC docker image"):
@@ -142,8 +153,11 @@ def uc_server():
         spec.create == "ALWAYS_CREATE" and spec.destroy == "ALWAYS_DESTROY"
     ), f"only ALWAYS_CREATE/ALWAYS_DESTROY is wired today; got {spec}"
 
+    global _ACTIVE_SERVER
     srv = start_container()
+    _ACTIVE_SERVER = srv  # publish for OssProvisioner (run path reuses this container)
     try:
         yield srv
     finally:
+        _ACTIVE_SERVER = None
         stop_container(srv.data_dir)

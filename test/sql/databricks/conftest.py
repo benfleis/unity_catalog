@@ -18,7 +18,7 @@ from uc.databricks.engine import ensure_env
 
 def pytest_configure(config):
     register_provisioner(
-        config, DatabricksProvisioner(), scope=os.path.dirname(__file__)
+        config, DatabricksProvisioner(config), scope=os.path.dirname(__file__)
     )
 
 
