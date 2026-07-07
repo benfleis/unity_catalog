@@ -1,5 +1,5 @@
-# name: test/sql/databricks/write_tests/write_catalog_managed.test
-# description: test
+# name: test/databricks/write_tests/write_catalog_managed.test
+# description: write path (catalog-managed cell) -- INSERT into a provisioned catalog-managed table and verify staged-commit backfill (delta.yaml v1).
 # group: [write_tests]
 
 # Require statement will ensure this test is run with this extension loaded

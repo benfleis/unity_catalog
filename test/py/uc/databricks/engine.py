@@ -32,34 +32,28 @@ import pytest
 
 from driver import find_duckdb, step  # find_duckdb: resolve tools from one build
 
-# The generator + cleaner live in scripts/databricks_data_gen/. The conftest puts
-# `scripts` on sys.path; make this importable directly too so the engine is
-# self-sufficient when loaded by the --cli flow.
-# databricks -> uc -> py -> test -> <repo root>  (4 dirs up from this file's dir)
+# The databricks_gen library (atomic SQL primitives over the SDK) lives in scripts/.
+# databricks -> uc -> py -> test -> <repo root>  (4 dirs up from this file's dir); put
+# `scripts` on sys.path so `import databricks_gen` resolves even when the --cli flow loads
+# this engine without the root conftest. databricks_gen imports the SDK lazily, so this
+# stays cheap -- test COLLECTION never pulls in databricks-sdk.
 _REPO_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
 )
-_GEN_DIR = os.path.join(_REPO_ROOT, "scripts", "databricks_data_gen")
-if _GEN_DIR not in sys.path:
-    sys.path.insert(0, _GEN_DIR)
+_SCRIPTS_DIR = os.path.join(_REPO_ROOT, "scripts")
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
 
-# Reuse the generator's table_props / build_create_sql / S3 layout verbatim so emitted
-# DDL matches the proven bulk path. The generator imports heavy deps at its top
-# (databricks.connect, pandas), so importing it is NOT cheap: do it LAZILY, only on a real
-# databricks provision, so test COLLECTION never pulls those in (a bare `pytest`/`--co`
-# under testpaths=test imports this conftest). The generator no longer uses python-duckdb
-# (a banned dep) -- it shells out to the duckdb CLI -- so that's gone from this path.
-_gen = None
+from databricks_gen import (  # noqa: E402  (needs _SCRIPTS_DIR on path)
+    CATALOG_MANAGED_PROPS,
+    build_create_table,
+    drop_schema,
+    execute,
+)
 
-
-def _generator():
-    """Lazily import + cache the databricks data-generator (heavy deps, see above)."""
-    global _gen
-    if _gen is None:
-        import generate_databricks_test_data  # noqa: E402  (deferred: see _generator docstring)
-
-        _gen = generate_databricks_test_data
-    return _gen
+# Databricks S3 layout for the `external` half of the 2x2 (the catalog-managed props for
+# the `cmt` half come from databricks_gen.CATALOG_MANAGED_PROPS).
+S3_BUCKET = "duckdb-databricks-testing-ccv2"
 
 
 @dataclass
@@ -146,49 +140,24 @@ def _split_source(source_fqn: str):
 
 
 def _provision_command(catalog, cell, source_fqn, dest_table, commit, storage):
-    """The concrete shell command that provisions one rw table (for the plan).
-
-    cmt+managed maps onto the new `copy-one --catalog-managed` CLI path; the other
-    cells have no single CLI flag yet, so we annotate them.
-    """
-    base = (
-        f"python scripts/databricks_data_gen/generate_databricks_test_data.py "
-        f"copy-one {source_fqn} {catalog}.{cell} --dest-table {dest_table}"
+    """Human-readable summary of the provision op (for the dry-run plan)."""
+    return (
+        f"# clone {source_fqn} -> {catalog}.{cell}.{dest_table} "
+        f"(commit={commit} storage={storage}) via databricks_gen"
     )
-    if commit == "cmt" and storage == "managed":
-        return base + " --catalog-managed"
-    return base + f"   # (+ commit={commit} storage={storage}: engine-built DDL)"
 
 
 def _build_table_sql(catalog, cell, source_fqn, dest_table, commit, storage):
-    """CREATE OR REPLACE TABLE SQL for one rw table covering the full 2x2."""
-    gen = _generator()
+    """CREATE OR REPLACE TABLE SQL for one rw table covering the full 2x2.
+
+    cmt -> catalog-managed TBLPROPERTIES; external -> explicit LOCATION (managed omits it).
+    Clones the source via AS SELECT (server-side copy).
+    """
     full = f"{catalog}.{cell}.{dest_table}"
-    location = f"s3://{gen.S3_BUCKET}/{catalog}/{cell}/{dest_table}"
-
-    if commit == "cmt" and storage == "managed":
-        # Proven generator path: catalog-managed props, no LOCATION.
-        return gen.build_create_sql(full, location, source_fqn, [gen.CATALOG_MANAGED])
-
-    # General path: choose props + LOCATION explicitly (the generator's builder
-    # couples no-LOCATION to catalog-managed, so build it here for the other cells).
-    props = {}
-    if commit == "cmt":
-        props.update(gen.table_props[gen.CATALOG_MANAGED])
-    location_clause = (
-        "" if storage == "managed" else f"\n            LOCATION '{location}'"
-    )
-    if props:
-        items = ", ".join(f"'{k}' = '{v}'" for k, v in props.items())
-        tblproperties = f"\n            TBLPROPERTIES ({items})"
-    else:
-        tblproperties = ""
-    return (
-        f"CREATE OR REPLACE TABLE {full}"
-        f"{location_clause}"
-        f"{tblproperties}\n"
-        f"            AS\n"
-        f"            SELECT * FROM {source_fqn}"
+    props = dict(CATALOG_MANAGED_PROPS) if commit == "cmt" else None
+    location = None if storage == "managed" else f"s3://{S3_BUCKET}/{catalog}/{cell}/{dest_table}"
+    return build_create_table(
+        full, as_select=f"SELECT * FROM {source_fqn}", properties=props, location=location
     )
 
 
@@ -268,11 +237,6 @@ class DatabricksProvisioner:
         first_cat, first_schema, _ = _split_source(_expand(specs[0].source))
         bindings = Bindings(catalog=first_cat, default_schema=first_schema, token=token)
 
-        spark = None
-        if not dry_run:
-            with step("connecting to Databricks (serverless)"):
-                spark = _generator().get_spark_session()  # creds ensured via ensure_env() above
-
         cell_for_default = None
         for spec in specs:
             source_fqn = _expand(spec.source)
@@ -309,8 +273,8 @@ class DatabricksProvisioner:
                 with step(
                     f"clone {source_fqn} -> {full} ({spec.property('commit')}/{spec.property('storage')})"
                 ):
-                    spark.sql(create_schema_sql)
-                    spark.sql(create_table_sql)
+                    execute(create_schema_sql)
+                    execute(create_table_sql)
 
         # Mono-cell default schema: the (first) rw cell if any, else source schema.
         if cell_for_default is not None:
@@ -332,21 +296,15 @@ class DatabricksProvisioner:
         return bindings
 
     def teardown(self, token, bindings=None) -> None:
-        """DROP each cell schema CASCADE. Reuses clean_test_data.drop_tables."""
-        import clean_test_data
-
+        """DROP each cell schema CASCADE (databricks_gen.drop_schema)."""
         cell_schemas = list(bindings.cell_schemas) if bindings else []
         if not cell_schemas:
             print(f"teardown: nothing to drop for token={token}")
             return
-        catalog = (
-            bindings.catalog
-            if bindings
-            else os.environ.get("UC_TEST_CATALOG")
-        )
+        catalog = bindings.catalog if bindings else os.environ.get("UC_TEST_CATALOG")
         for cell in cell_schemas:
             with step(f"drop cell schema {catalog}.{cell} CASCADE"):
-                clean_test_data.drop_tables(f"{catalog}.{cell}", dry_run=False)
+                drop_schema(f"{catalog}.{cell}", cascade=True)
 
     def make_init(self, bindings: Bindings, *, redact: bool = False) -> str:
         """duckdb init SQL for `duckdb -unsigned -init`.

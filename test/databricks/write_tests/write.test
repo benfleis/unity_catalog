@@ -1,5 +1,5 @@
-# name: test/sql/databricks/write_tests/write.test
-# description: test
+# name: test/databricks/write_tests/write.test
+# description: write path -- attach a provisioned Unity Catalog table (plain/external cell) and round-trip an INSERT.
 # group: [write_tests]
 
 # Require statement will ensure this test is run with this extension loaded

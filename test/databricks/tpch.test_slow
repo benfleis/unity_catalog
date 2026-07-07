@@ -1,5 +1,5 @@
-# name: test/sql/databricks/tpch.test_slow
-# description: test
+# name: test/databricks/tpch.test_slow
+# description: read-only TPC-H query suite against premade Databricks tables via Unity Catalog.
 # group: [databricks]
 
 require parquet
@@ -24,9 +24,9 @@ set ignore_error_messages
 statement ok
 CREATE SECRET (
     TYPE unity_catalog,
-    TOKEN '${DATABRICKS_TOKEN}',
-    ENDPOINT '${DATABRICKS_ENDPOINT}',
-    AWS_REGION '${DATABRICKS_REGION}'
+    TOKEN '{DATABRICKS_TOKEN}',
+    ENDPOINT '{DATABRICKS_ENDPOINT}',
+    AWS_REGION '{DATABRICKS_REGION}'
 );
 
 # Attach to databricks through the unity catalog API
@@ -39,17 +39,17 @@ USE duckdb_testing
 loop i 1 9
 
 query I
-PRAGMA tpch(${i})
+PRAGMA tpch({i})
 ----
-<FILE>:duckdb/extension/tpch/dbgen/answers/sf0.01/q0${i}.csv
+<FILE>:duckdb/extension/tpch/dbgen/answers/sf0.01/q0{i}.csv
 
 endloop
 
 loop i 10 23
 
 query I
-PRAGMA tpch(${i})
+PRAGMA tpch({i})
 ----
-<FILE>:duckdb/extension/tpch/dbgen/answers/sf0.01/q${i}.csv
+<FILE>:duckdb/extension/tpch/dbgen/answers/sf0.01/q{i}.csv
 
 endloop

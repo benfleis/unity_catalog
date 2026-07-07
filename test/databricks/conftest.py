@@ -1,7 +1,7 @@
 """Databricks subtree conftest: registers the Databricks provisioner.
 
 Scoping the registration to this conftest means the framework's --cli flow finds
-the Databricks backend ONLY when a test under test/sql/databricks/ is selected —
+the Databricks backend ONLY when a test under test/databricks/ is selected —
 resolution is by test location, not a hardcoded backend (see driver/provision.py
 "REGISTRATION SEAM"). The root conftest already puts test/py on sys.path, so
 `from uc.databricks import ...` resolves here.

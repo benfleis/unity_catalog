@@ -1,5 +1,5 @@
-# name: test/sql/databricks/tpcds.test_slow
-# description: test
+# name: test/databricks/tpcds.test_slow
+# description: read-only TPC-DS query suite against premade Databricks tables via Unity Catalog.
 # group: [databricks]
 
 require parquet
@@ -35,9 +35,9 @@ set ignore_error_messages
 statement ok
 CREATE SECRET (
     TYPE unity_catalog,
-    TOKEN '${DATABRICKS_TOKEN}',
-    ENDPOINT '${DATABRICKS_ENDPOINT}',
-    AWS_REGION '${DATABRICKS_REGION}'
+    TOKEN '{DATABRICKS_TOKEN}',
+    ENDPOINT '{DATABRICKS_ENDPOINT}',
+    AWS_REGION '{DATABRICKS_REGION}'
 );
 
 # Attach to databricks through the unity catalog API
@@ -50,17 +50,17 @@ USE duckdb_testing
 loop i 1 9
 
 query I
-PRAGMA tpcds(${i})
+PRAGMA tpcds({i})
 ----
-<FILE>:duckdb/extension/tpcds/dsdgen/answers/sf0.01/0${i}.csv
+<FILE>:duckdb/extension/tpcds/dsdgen/answers/sf0.01/0{i}.csv
 
 endloop
 
 loop i 10 99
 
 query I
-PRAGMA tpcds(${i})
+PRAGMA tpcds({i})
 ----
-<FILE>:duckdb/extension/tpcds/dsdgen/answers/sf0.01/${i}.csv
+<FILE>:duckdb/extension/tpcds/dsdgen/answers/sf0.01/{i}.csv
 
 endloop

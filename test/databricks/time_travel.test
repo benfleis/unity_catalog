@@ -1,0 +1,61 @@
+# name: test/databricks/time_travel.test
+# description: read-only Delta time travel (AT VERSION => n) against a premade, schema-evolving table via Unity Catalog.
+# group: [databricks]
+
+require parquet
+
+require unity_catalog
+
+require delta
+
+require httpfs
+
+require-env DATABRICKS_TOKEN
+
+require-env DATABRICKS_ENDPOINT
+
+require-env DATABRICKS_REGION
+
+require-env UC_TEST_CATALOG
+
+require-env UC_TEST_SCHEMA
+
+statement ok
+CREATE SECRET (
+    TYPE unity_catalog,
+    TOKEN '{DATABRICKS_TOKEN}',
+    ENDPOINT '{DATABRICKS_ENDPOINT}',
+    AWS_REGION '{DATABRICKS_REGION}'
+);
+
+statement ok
+set threads=2;
+
+statement ok
+ATTACH '{UC_TEST_CATALOG}' (TYPE unity_catalog, READ_ONLY, DEFAULT_SCHEMA '{UC_TEST_SCHEMA}');
+
+# -----------------------------------------------------------------------------
+# Time travel across the table's version history
+#
+
+query I
+select * from {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.evolution_simple_id_mode AT (VERSION => 0)
+----
+1
+
+query II
+select * from {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.evolution_simple_id_mode AT (VERSION => 1)
+----
+1	NULL
+
+query II
+select * from {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.evolution_simple_id_mode AT (VERSION => 2)
+----
+2	2
+1	NULL
+
+query II
+select * from {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.evolution_simple_id_mode
+----
+2	2
+1	NULL
