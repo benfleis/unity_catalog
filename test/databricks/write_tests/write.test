@@ -1,8 +1,7 @@
 # name: test/databricks/write_tests/write.test
-# description: write path -- attach a provisioned Unity Catalog table (plain/external cell) and round-trip an INSERT.
+# description: write path -- seed the id_name fixture into a plain/external cell, round-trip an INSERT.
 # group: [write_tests]
 
-# Require statement will ensure this test is run with this extension loaded
 require parquet
 
 require unity_catalog
@@ -32,31 +31,31 @@ CREATE SECRET (
     AWS_REGION '{DATABRICKS_REGION}'
 );
 
-# Attach to databricks through the unity catalog API
 statement ok
 ATTACH '{UC_TEST_CATALOG}' AS databricks_catalog (TYPE unity_catalog, DEFAULT_SCHEMA '{UC_TEST_SCHEMA}');
 
 statement ok
 USE databricks_catalog;
 
-query I
-SELECT * FROM simple_table ORDER BY id;
+# The provisioner seeded id_name (5 rows) into the cell; read it back, then round-trip an INSERT.
+query II
+SELECT id, name FROM id_name ORDER BY id;
 ----
-1
-2
-3
-4
-5
+1	one
+2	two
+3	three
+4	four
+5	five
 
 statement ok
-INSERT INTO simple_table VALUES (10);
+INSERT INTO id_name VALUES (10, 'ten');
 
-query I
-SELECT * FROM simple_table ORDER BY id;
+query II
+SELECT id, name FROM id_name ORDER BY id;
 ----
-1
-2
-3
-4
-5
-10
+1	one
+2	two
+3	three
+4	four
+5	five
+10	ten

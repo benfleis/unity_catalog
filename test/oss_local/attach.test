@@ -1,4 +1,4 @@
-# name: test/sql/oss_local/attach.test
+# name: test/oss_local/attach.test
 # description: attach/detach/USE semantics for the unity_catalog extension against the OSS UC ducklabs image. Paired attach.py declares the server (uc_server) and provisions a unique empty duck.cmt.{UC_TEST_TABLE}.
 # group: [oss_local]
 

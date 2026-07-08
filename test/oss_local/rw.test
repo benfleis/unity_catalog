@@ -1,4 +1,4 @@
-# name: test/sql/oss_local/rw.test
+# name: test/oss_local/rw.test
 # description: shared read/write round-trip that is IDENTICAL for catalog-managed (cmt) and plain (plain) tables -- the data behavior must not differ by table type. rw.py parametrizes this body over [cmt, plain] via {UC_TEST_SCHEMA}; the table-type-specific protocol assertions (LoadTable/UpdateTable called or not) live in table-cmt/ and table-plain/.
 # group: [oss_local]
 

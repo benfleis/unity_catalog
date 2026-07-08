@@ -1,4 +1,4 @@
-# name: test/sql/oss_local/table-cmt/checkpoint.test
+# name: test/oss_local/table-cmt/checkpoint.test
 # description: catalog-managed (CMT) checkpoint variant -- unity_catalog_checkpoint_table forwarding against a SINGLE catalog-managed table (duck.cmt.{UC_TEST_TABLE}) -- error cases, then checkpoint via FQ / USE-cat+qualified / USE-cat + bare / USE-cat.schema + bare, advancing one version between each, then assert the checkpoint files landed under the cmt schema dir. Reuses id_name (no bespoke tables). The cmt half of the contrast with table-plain/checkpoint. Paired checkpoint.py provisions the table + injects {UC_TEST_DATA}.
 # group: [oss_local]
 

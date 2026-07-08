@@ -1,5 +1,5 @@
 # name: test/databricks/read_column_mapped.test
-# description: read-only reads of column-mapped / schema-evolved Delta tables via Unity Catalog.
+# description: read-only reads of schema-evolved Delta tables (name-mode column mapping + plain add-column) via Unity Catalog.
 # group: [databricks]
 
 require parquet
@@ -35,38 +35,29 @@ statement ok
 ATTACH '{UC_TEST_CATALOG}' (TYPE unity_catalog, READ_ONLY, DEFAULT_SCHEMA '{UC_TEST_SCHEMA}');
 
 # -----------------------------------------------------------------------------
-# Column-mapped reads
+# name-mode column mapping: added `val` reads NULL for the pre-existing rows
 #
 
-query II
-from {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.evolution_simple_name_mode ORDER BY all
+query III
+SELECT id, name, val FROM {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.id_name__alter_colmap_name ORDER BY id
 ----
-1	NULL
-2	2
-
-query II
-from {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.evolution_column_change ORDER BY a
-----
-value1	NULL
-value3	NULL
-value4	5
-
-query II
-SELECT a,b from {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.evolution_column_change ORDER BY a
-----
-value1	NULL
-value3	NULL
-value4	5
+1	one	NULL
+2	two	NULL
+3	three	NULL
+4	four	NULL
+5	five	NULL
+6	six	6
 
 # -----------------------------------------------------------------------------
-# Projections + generated/virtual columns (FIXME: rowid columns can't be delegated yet)
+# plain add-column (no mapping): same shape, read must agree
 #
 
-mode skip
-
-query IIII
-SELECT file_row_number, filename.substring(-8,8), b, a from {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.evolution_column_change order by a
+query III
+SELECT id, name, val FROM {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.id_name__alter_plain ORDER BY id
 ----
-0	.parquet	NULL	value1
-0	.parquet	NULL	value3
-0	.parquet	5	value4
+1	one	NULL
+2	two	NULL
+3	three	NULL
+4	four	NULL
+5	five	NULL
+6	six	6

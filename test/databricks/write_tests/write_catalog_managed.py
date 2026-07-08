@@ -1,20 +1,15 @@
-"""Driver for write_catalog_managed.test — carries the target @requires.
+"""Driver for write_catalog_managed.test -- seed id_name into a cmt x managed cell and write.
 
-The @requires declares the one resource this test needs: an rw clone of the premade
-source `simple_table`, in the cmt x managed cell (catalog-managed commit protocol,
-UC-managed storage). The `resources` fixture provisions a `cmt__managed__<token>`
-cell schema, clones `simple_table` into it BARE, injects UC_TEST_CATALOG/SCHEMA into
-the body via run_paired(env=...), and tears the schema down afterward. The same
-@requires + provisioner also drive `pytest --cli` for an interactive session.
+@requires(access="rw") seeds `id_name` into an isolated `cmt__managed__<token>` cell
+(catalog-managed commit protocol, UC-managed storage): the provisioner create+inserts the
+fixture, injects UC_TEST_CATALOG/SCHEMA into the body (run_paired env=...), and drops the cell
+on teardown. The body exercises the staged-commit + backfill (delta.yaml v1) protocol. The
+same @requires + provisioner also drive `pytest --cli`.
 """
 
-from driver import requires, run_paired
+from driver import Fixture, requires, run_paired
 
 
-@requires(
-    source="${UC_TEST_CATALOG}.source.simple_table",
-    access="rw",
-    properties={"commit": "cmt", "storage": "managed"},
-)
+@requires(source=Fixture("id_name"), access="rw", properties={"commit": "cmt", "storage": "managed"})
 def test_write_catalog_managed(request, resources):
     run_paired(request, env=resources.env)

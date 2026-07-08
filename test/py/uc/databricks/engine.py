@@ -25,12 +25,14 @@ ASSUMPTIONS (cannot be verified here — no Databricks; see REPORT):
 """
 
 import os
+import subprocess
 import sys
 from dataclasses import dataclass, field
 
 import pytest
 
-from driver import find_duckdb, step  # find_duckdb: resolve tools from one build
+from driver import Fixture, find_duckdb, step  # find_duckdb: resolve tools from one build
+from duckdb_pytest_driver.fixtures import canonicalize, load_fixture, map_columns, resolve_seed
 
 # The databricks_gen library (atomic SQL primitives over the SDK) lives in scripts/.
 # databricks -> uc -> py -> test -> <repo root>  (4 dirs up from this file's dir); put
@@ -46,14 +48,24 @@ if _SCRIPTS_DIR not in sys.path:
 
 from databricks_gen import (  # noqa: E402  (needs _SCRIPTS_DIR on path)
     CATALOG_MANAGED_PROPS,
-    build_create_table,
+    DATABRICKS_TYPE_MAP,
+    create_table,
     drop_schema,
     execute,
+    insert,
+    run_sql_file,
 )
 
-# Databricks S3 layout for the `external` half of the 2x2 (the catalog-managed props for
-# the `cmt` half come from databricks_gen.CATALOG_MANAGED_PROPS).
-S3_BUCKET = "duckdb-databricks-testing-ccv2"
+# Account config (S3 bucket, catalogs) -- env-overridable, in one place (see config.py).
+from . import config  # noqa: E402
+
+# Two definition sources the provisioner instantiates from:
+#   _FIXTURES  -- portable driver fixtures (id_name) for the write/attach tests: create + insert.
+#   _DATA_DIR  -- Databricks Delta-artifact defs (evolution / column-mapping / catalog-managed)
+#                 for the RO read tests: run verbatim via run_sql_file (`<table>.sql`, plus an
+#                 optional `<table>.insert.sql` for the DuckDB UC write path).
+_FIXTURES = os.path.join(_REPO_ROOT, "test", "fixtures")
+_DATA_DIR = os.path.join(_REPO_ROOT, "test", "databricks", "data")
 
 
 @dataclass
@@ -115,7 +127,7 @@ def _default_catalog_env():
     else falls back to the standard write-test catalog. Override by exporting
     UC_TEST_CATALOG.
     """
-    os.environ.setdefault("UC_TEST_CATALOG", "duckdb_write_testing")
+    os.environ.setdefault("UC_TEST_CATALOG", config.WRITE_CATALOG)
 
 
 def cell_schema_name(commit: str, storage: str, token: str) -> str:
@@ -139,30 +151,8 @@ def _split_source(source_fqn: str):
 # ---------------------------------------------------------------------------
 
 
-def _provision_command(catalog, cell, source_fqn, dest_table, commit, storage):
-    """Human-readable summary of the provision op (for the dry-run plan)."""
-    return (
-        f"# clone {source_fqn} -> {catalog}.{cell}.{dest_table} "
-        f"(commit={commit} storage={storage}) via databricks_gen"
-    )
-
-
-def _build_table_sql(catalog, cell, source_fqn, dest_table, commit, storage):
-    """CREATE OR REPLACE TABLE SQL for one rw table covering the full 2x2.
-
-    cmt -> catalog-managed TBLPROPERTIES; external -> explicit LOCATION (managed omits it).
-    Clones the source via AS SELECT (server-side copy).
-    """
-    full = f"{catalog}.{cell}.{dest_table}"
-    props = dict(CATALOG_MANAGED_PROPS) if commit == "cmt" else None
-    location = None if storage == "managed" else f"s3://{S3_BUCKET}/{catalog}/{cell}/{dest_table}"
-    return build_create_table(
-        full, as_select=f"SELECT * FROM {source_fqn}", properties=props, location=location
-    )
-
-
 # ---------------------------------------------------------------------------
-# Credentials (the dbx Provider's connection creds)
+# Credentials (the Databricks provider's connection creds)
 # ---------------------------------------------------------------------------
 
 _CRED_VARS = ("DATABRICKS_TOKEN", "DATABRICKS_ENDPOINT", "DATABRICKS_REGION")
@@ -214,6 +204,9 @@ class DatabricksProvisioner:
         # driver runs the unittest binary from (--build / $BUILD_DIR / --duckdb-bin),
         # instead of a hardcoded build/release. See uc.oss.OssProvisioner.
         self._config = config
+        # RO variant tables are provisioned from their def ONCE per session (per worker under
+        # xdist); this guards re-provisioning. Mirrors uc.oss.OssProvisioner._shared_ro.
+        self._shared_ro = set()
 
     def provision(self, specs, token, *, dry_run=False, params=None) -> Bindings:
         """Provision fixtures for `specs` under `token`. See module docstring.
@@ -232,55 +225,46 @@ class DatabricksProvisioner:
 
         ensure_env(dry_run=dry_run)  # UC_TEST_CATALOG default + creds check (skipped on dry_run)
 
-        # Catalog/default come from the first spec's (expanded) source — all specs
-        # in one test are expected to share a catalog (mono-cell binding).
-        first_cat, first_schema, _ = _split_source(_expand(specs[0].source))
-        bindings = Bindings(catalog=first_cat, default_schema=first_schema, token=token)
+        # `access` decides POLICY (namespace + lifecycle), NOT how to instantiate:
+        #   rw -> an isolated per-test cell in the write catalog, dropped on teardown;
+        #   ro -> the shared table the source FQN names, instantiated once per session.
+        # The instantiation itself (fixture vs Databricks def) is _instantiate's job.
+        write_catalog = os.environ["UC_TEST_CATALOG"]  # ensure_env defaulted it (config.WRITE_CATALOG)
+        bindings = Bindings(catalog=write_catalog, default_schema="main", token=token)
 
         cell_for_default = None
         for spec in specs:
-            source_fqn = _expand(spec.source)
-            cat, schema, table = _split_source(source_fqn)
             bare = spec.resolved_name()
 
-            if spec.access == "ro":
-                bindings.tables.append(TableBinding(bare, source_fqn, "ro"))
-                bindings.plan.append(f"[ro] reference {source_fqn} as {bare} (no DDL)")
-                continue
+            if spec.access == "rw":
+                cell = cell_schema_name(spec.property("commit"), spec.property("storage"), token)
+                target = f"{write_catalog}.{cell}.{bare}"
+                if cell not in bindings.cell_schemas:
+                    bindings.cell_schemas.append(cell)
+                    bindings.plan.append(f"CREATE SCHEMA IF NOT EXISTS {write_catalog}.{cell};")
+                    if not dry_run:
+                        execute(f"CREATE SCHEMA IF NOT EXISTS {write_catalog}.{cell}")
+                if cell_for_default is None:
+                    cell_for_default = cell
+                self._instantiate(spec, target, dry_run, bindings)
+                bindings.tables.append(TableBinding(bare, target, "rw"))
+            else:
+                # ro sources are FQN strings naming a shared, premade/def table.
+                target = _expand(spec.source)
+                bindings.catalog, bindings.default_schema = _split_source(target)[:2]
+                if target in self._shared_ro:
+                    bindings.plan.append(f"[ro] {target} already provisioned this session")
+                else:
+                    self._instantiate(spec, target, dry_run, bindings)
+                    if not dry_run:
+                        self._shared_ro.add(target)
+                bindings.tables.append(TableBinding(bare, target, "ro"))
 
-            # rw: cell-encoded isolation schema + single-table clone with cell props.
-            cell = cell_schema_name(spec.property("commit"), spec.property("storage"), token)
-            if cell not in bindings.cell_schemas:
-                bindings.cell_schemas.append(cell)
-            if cell_for_default is None:
-                cell_for_default = cell
-
-            full = f"{cat}.{cell}.{bare}"
-            cmd = _provision_command(
-                cat, cell, source_fqn, bare, spec.property("commit"), spec.property("storage")
-            )
-            create_schema_sql = f"CREATE SCHEMA IF NOT EXISTS {cat}.{cell}"
-            create_table_sql = _build_table_sql(
-                cat, cell, source_fqn, bare, spec.property("commit"), spec.property("storage")
-            )
-
-            bindings.tables.append(TableBinding(bare, full, "rw"))
-            bindings.plan.append(cmd)
-            bindings.plan.append(f"    {create_schema_sql};")
-            bindings.plan.append(f"    {create_table_sql};")
-
-            if not dry_run:
-                with step(
-                    f"clone {source_fqn} -> {full} ({spec.property('commit')}/{spec.property('storage')})"
-                ):
-                    execute(create_schema_sql)
-                    execute(create_table_sql)
-
-        # Mono-cell default schema: the (first) rw cell if any, else source schema.
+        # Mono-cell default schema: the (first) rw cell if any, else the ro source schema.
         if cell_for_default is not None:
             bindings.default_schema = cell_for_default
 
-        # Env a future run path would inject (body reads these; see the .test).
+        # Env a run path injects (body reads these; see the .test).
         bindings.env = {
             "UC_TEST_CATALOG": bindings.catalog,
             "UC_TEST_SCHEMA": bindings.default_schema,
@@ -294,6 +278,84 @@ class DatabricksProvisioner:
             print(f"DEFAULT_SCHEMA: {bindings.default_schema}")
 
         return bindings
+
+    def _instantiate(self, spec, target, dry_run, bindings):
+        """Instantiate `target` from `spec`'s definition. Dispatches on definition TYPE (the
+        instantiation method) -- independent of `access`, which set target + lifecycle above.
+        """
+        if isinstance(spec.source, Fixture):
+            self._instantiate_fixture(spec, target, dry_run, bindings)
+        else:
+            self._instantiate_def(target, dry_run, bindings)
+
+    def _instantiate_fixture(self, spec, target, dry_run, bindings):
+        """Seed a portable Fixture into `target` with the 2x2 props/location (create + insert).
+
+        The one path for write/attach tests. Dry-run only NAMES the fixture + cell (no duckdb
+        canonicalization, no I/O -- mirrors the OSS provisioner); the real path canonicalizes
+        -> columns + seed, then create_table (with the cell's commit/storage props/location) +
+        insert.
+        """
+        name = spec.source.name  # fixture logical name -- pure, no I/O
+        cell_desc = f"{spec.property('commit') or 'plain'}/{spec.property('storage') or 'managed'}"
+        bindings.plan.append(f"[{spec.access}] seed {target} from fixture {name!r} ({cell_desc})")
+        if dry_run:
+            return
+        props = dict(CATALOG_MANAGED_PROPS) if spec.property("commit") == "cmt" else None
+        location = self._s3_location(target) if spec.property("storage") == "external" else None
+        definition = load_fixture(spec.source, [_FIXTURES])
+        tbl = canonicalize(self._duckdb_cli(), definition)
+        cols = ", ".join(f"{n} {t}" for n, t in map_columns(tbl, DATABRICKS_TYPE_MAP))
+        rows = resolve_seed(spec.source.seed, tbl.seed_data)
+        with step(f"seed {target} from fixture {name!r} ({cell_desc})"):
+            create_table(target, cols, properties=props, location=location)
+            if rows:
+                insert(target, rows)
+
+    def _instantiate_def(self, target, dry_run, bindings):
+        """Run a Databricks Delta-artifact def (test/databricks/data/<table>.sql) verbatim; a
+        companion <table>.insert.sql seeds via the DuckDB UC write path (the cmt__duckdb case).
+        No def -> the table is treated as premade (reference only, no DDL).
+        """
+        _, _, table = _split_source(target)
+        def_path = os.path.join(_DATA_DIR, f"{table}.sql")
+        if not os.path.isfile(def_path):
+            bindings.plan.append(f"[ro] reference {target} (premade, no def)")
+            return
+        with open(def_path) as f:
+            external = "{location}" in f.read()
+        location = self._s3_location(target) if external else None
+        insert_path = os.path.join(_DATA_DIR, f"{table}.insert.sql")
+        bindings.plan.append(f"[ro] provision {target} from {os.path.basename(def_path)}")
+        if os.path.isfile(insert_path):
+            bindings.plan.append(f"    + DuckDB UC insert ({os.path.basename(insert_path)})")
+        if dry_run:
+            return
+        with step(f"provision {target} from {os.path.basename(def_path)}"):
+            run_sql_file(def_path, table=target, location=location)
+            if os.path.isfile(insert_path):
+                self._duckdb_insert(insert_path)
+
+    def _s3_location(self, target):
+        """The S3 LOCATION for an `external` target: s3://<bucket>/<cat>/<schema>/<table>."""
+        cat, schema, table = _split_source(target)
+        return f"s3://{config.S3_BUCKET}/{cat}/{schema}/{table}"
+
+    def _duckdb_cli(self):
+        """The duckdb CLI from the same build the driver resolves the unittest binary from."""
+        wd = getattr(self._config, "sqllogic_working_dir", None) or os.getcwd()
+        return find_duckdb(self._config, wd)
+
+    def _duckdb_insert(self, path):
+        """Run a companion .insert.sql through the build's duckdb (the UC write path). Its
+        ${DATABRICKS_*} creds are expanded from the env (present on the run path)."""
+        wd = getattr(self._config, "sqllogic_working_dir", None) or os.getcwd()
+        duckdb_bin = find_duckdb(self._config, wd)
+        with open(path) as f:
+            sql = os.path.expandvars(f.read())
+        proc = subprocess.run([duckdb_bin, "-unsigned", "-c", sql], capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise RuntimeError(f"DuckDB UC insert failed ({os.path.basename(path)}):\n{proc.stderr.strip()}")
 
     def teardown(self, token, bindings=None) -> None:
         """DROP each cell schema CASCADE (databricks_gen.drop_schema)."""

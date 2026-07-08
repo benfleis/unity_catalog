@@ -26,7 +26,7 @@ require-env UC_TEST_SCHEMA
 #
 
 statement ok
-CREATE OR REPLACE SECRET dbx (
+CREATE OR REPLACE SECRET databricks (
     TYPE unity_catalog,
     TOKEN '{DATABRICKS_TOKEN}',
     ENDPOINT '{DATABRICKS_ENDPOINT}',
@@ -36,14 +36,14 @@ CREATE OR REPLACE SECRET dbx (
 statement ok
 ATTACH '{UC_TEST_CATALOG}' (TYPE unity_catalog, READ_ONLY, DEFAULT_SCHEMA '{UC_TEST_SCHEMA}');
 
-query I nosort expected_res
-from {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.simple_table;
+query II nosort expected_res
+SELECT id, name FROM {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.id_name ORDER BY id;
 
 statement ok
 use {UC_TEST_CATALOG}
 
-query I nosort expected_res
-from simple_table;
+query II nosort expected_res
+SELECT id, name FROM id_name ORDER BY id;
 
 statement ok
 use memory
@@ -56,7 +56,7 @@ DETACH {UC_TEST_CATALOG}
 #
 
 statement ok
-CREATE OR REPLACE SECRET dbx (
+CREATE OR REPLACE SECRET databricks (
     TYPE UC,
     TOKEN '{DATABRICKS_TOKEN}',
     ENDPOINT '{DATABRICKS_ENDPOINT}',
@@ -66,8 +66,8 @@ CREATE OR REPLACE SECRET dbx (
 statement ok
 ATTACH '{UC_TEST_CATALOG}' (TYPE unity_catalog, READ_ONLY, DEFAULT_SCHEMA '{UC_TEST_SCHEMA}');
 
-query I nosort expected_res
-from {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.simple_table;
+query II nosort expected_res
+SELECT id, name FROM {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.id_name ORDER BY id;
 
 statement ok
 use memory
@@ -85,17 +85,17 @@ mode skip
 statement ok
 ATTACH '{UC_TEST_CATALOG}' (TYPE unity_catalog, READ_ONLY);
 
-query I nosort expected_res
-from {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.simple_table;
+query II nosort expected_res
+SELECT id, name FROM {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.id_name ORDER BY id;
 
 # TODO: can we fix this? Or at least throw a nicer error
 statement error
 use {UC_TEST_CATALOG}
 ----
-Catalog Error: SET schema: No catalog + schema named "duckdb_testing" found.
+Catalog Error: SET schema: No catalog + schema named found.
 
 statement ok
 use {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}
 
-query I nosort expected_res
-from simple_table;
+query II nosort expected_res
+SELECT id, name FROM id_name ORDER BY id;

@@ -1,13 +1,16 @@
 """Driver for time_travel.test -- read-only Delta time travel against a premade table.
 
-Paired read: @requires(access="ro") references the preloaded duckdb_testing table (no
-DDL) and injects UC_TEST_CATALOG/SCHEMA, so the body attaches + reads AT (VERSION => n)
-entirely through env. See test/databricks/README.md for the preloaded data.
+Paired read: @requires(access="ro") references the premade id_name__alter_colmap_id table
+(schema-evolving, columnMapping.mode=id; see test/databricks/data/) and injects
+UC_TEST_CATALOG/SCHEMA, so the body attaches + reads AT (VERSION => n) through env.
+The read catalog is config.READ_CATALOG (env: DATABRICKS_READ_CATALOG).
 """
 
 from driver import requires, run_paired
 
+from uc.databricks import config
 
-@requires(source="duckdb_testing.main.evolution_simple_id_mode", access="ro")
+
+@requires(source=f"{config.READ_CATALOG}.main.id_name__alter_colmap_id", access="ro")
 def test_time_travel(request, resources):
     run_paired(request, env=resources.env)

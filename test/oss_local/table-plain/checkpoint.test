@@ -1,4 +1,4 @@
-# name: test/sql/oss_local/table-plain/checkpoint.test
+# name: test/oss_local/table-plain/checkpoint.test
 # description: unity_catalog_checkpoint_table forwarding against a SINGLE EXTERNAL table (duck.plain.{UC_TEST_TABLE}) -- error cases, then checkpoint via FQ / USE-cat+qualified / USE-cat + bare / USE-cat.schema + bare, advancing one version between each, then assert the checkpoint files landed. Reuses id_name (no bespoke tables). Ports legacy todo/checkpoint.test. Paired checkpoint.py provisions the table + injects {UC_TEST_DATA}.
 # group: [oss_local]
 
