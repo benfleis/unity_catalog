@@ -1,5 +1,4 @@
 #include "uc_api.hpp"
-#include "uc_logging.hpp"
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/parser/parsed_data/attach_info.hpp"
 #include "duckdb/transaction/transaction_manager.hpp"
