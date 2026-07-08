@@ -1,4 +1,5 @@
 #include "storage/unity_catalog.hpp"
+#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "storage/uc_schema_entry.hpp"
 #include "storage/uc_table_entry.hpp"
 #include "storage/uc_table_set.hpp"

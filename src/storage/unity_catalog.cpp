@@ -1,4 +1,6 @@
 #include "storage/unity_catalog.hpp"
+#include "duckdb/planner/logical_operator.hpp"
+#include "duckdb/execution/physical_plan_generator.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/parser/parsed_data/attach_info.hpp"
