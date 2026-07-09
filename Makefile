@@ -29,10 +29,14 @@ venv:
 
 # This is to (re)gen the test data in the remote databricks, this does not need to be rerun unless remote data needs refreshing
 # Requires the same env variables from the write tests
+# NOTE: requires databricks env IN PLACE, and $(BUILD_DIR)/duckdb with UC+Delta extensions loaded
 test_data_prepare: venv
 	for f in scripts/databricks_data_gen/custom_data_sources/*.sql; do \
 		${PYTHON_BIN} scripts/databricks_data_gen/generate_databricks_test_data.py from-custom-sql $$f duckdb_testing.main; \
 	done
+	# id_day_managed_duckdb: loop above created empty catalog-managed table via Spark; now insert data via DuckDB UC extension
+	# TODO: update gen+table structures to use this for all simple tables; it's currently 1-off for this specific bug fix
+	bash -c 'envsubst < scripts/databricks_data_gen/duckdb_data_sources/insert_id_day_managed_duckdb.sql | $(BUILD_DIR)/duckdb'
 	${PYTHON_BIN} scripts/databricks_data_gen/generate_databricks_test_data.py from-duckdb-sql scripts/databricks_data_gen/duckdb_data_sources/tpcds_sf0_01.sql duckdb_testing.tpcds_sf0_01
 	${PYTHON_BIN} scripts/databricks_data_gen/generate_databricks_test_data.py from-duckdb-sql scripts/databricks_data_gen/duckdb_data_sources/tpch_sf0_01.sql duckdb_testing.tpch_sf0_01
 
