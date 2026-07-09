@@ -66,9 +66,10 @@ static void CheckpointTableFunction(ClientContext &context, TableFunctionInput &
 	data.finished = true;
 
 	CatalogEntryRetriever catalog_entry_retriever(context);
-	EntryLookupInfo lookup_table(CatalogType::TABLE_ENTRY, Identifier(data.table_name));
-	auto tbl_entry =
-	    catalog_entry_retriever.GetEntry(Identifier(data.catalog_name), Identifier(data.schema_name), lookup_table);
+	EntryLookupInfo lookup_table(
+	    CatalogType::TABLE_ENTRY,
+	    QualifiedName(Identifier(data.catalog_name), Identifier(data.schema_name), Identifier(data.table_name)));
+	auto tbl_entry = catalog_entry_retriever.GetEntry(lookup_table);
 	if (!tbl_entry) {
 		throw InvalidInputException("Unity Catalog table not found: '%s.%s.%s'", data.catalog_name, data.schema_name,
 		                            data.table_name);
