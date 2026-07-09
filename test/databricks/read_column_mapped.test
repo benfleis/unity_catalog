@@ -1,0 +1,63 @@
+# name: test/databricks/read_column_mapped.test
+# description: read-only reads of schema-evolved Delta tables (name-mode column mapping + plain add-column) via Unity Catalog.
+# group: [databricks]
+
+require parquet
+
+require unity_catalog
+
+require delta
+
+require httpfs
+
+require-env DATABRICKS_TOKEN
+
+require-env DATABRICKS_ENDPOINT
+
+require-env DATABRICKS_REGION
+
+require-env UC_TEST_CATALOG
+
+require-env UC_TEST_SCHEMA
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE unity_catalog,
+    TOKEN '{DATABRICKS_TOKEN}',
+    ENDPOINT '{DATABRICKS_ENDPOINT}',
+    AWS_REGION '{DATABRICKS_REGION}'
+);
+
+statement ok
+ATTACH '{UC_TEST_CATALOG}' (TYPE unity_catalog, READ_ONLY, DEFAULT_SCHEMA '{UC_TEST_SCHEMA}');
+
+# -----------------------------------------------------------------------------
+# name-mode column mapping: added `val` reads NULL for the pre-existing rows
+#
+
+query III
+SELECT id, name, val FROM {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.id_name__alter_colmap_name ORDER BY id
+----
+1	one	NULL
+2	two	NULL
+3	three	NULL
+4	four	NULL
+5	five	NULL
+6	six	6
+
+# -----------------------------------------------------------------------------
+# plain add-column (no mapping): same shape, read must agree
+#
+
+query III
+SELECT id, name, val FROM {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.id_name__alter_plain ORDER BY id
+----
+1	one	NULL
+2	two	NULL
+3	three	NULL
+4	four	NULL
+5	five	NULL
+6	six	6
