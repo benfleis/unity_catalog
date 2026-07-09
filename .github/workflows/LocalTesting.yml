@@ -11,8 +11,11 @@ defaults:
   run:
     shell: bash
 env:
-  BASE_BRANCH: ${{ github.base_ref || (endsWith(github.ref, '_feature') && 'feature' || 'main') }}
+  BASE_BRANCH: ${{ github.base_ref || (startsWith(github.ref, 'refs/heads/features/') && 'feature' || 'main') }}
   VCPKG_COMMIT_ID: 84bab45d415d22042bd0b9081aea57f362da3f35
+  # Pull prebuilt vcpkg packages (OpenSSL etc.) from duckdb's hosted read-only cache
+  # instead of building them from source each run.
+  VCPKG_BINARY_SOURCES: 'clear;http,https://vcpkg-cache.duckdb.org,read'
 
 jobs:
   unity-catalog-local-linux:
@@ -75,24 +78,6 @@ jobs:
           sleep 15 # should be quite fast, capture initial output in GH logs
           # some tests require manual inspection of files whose location incorrectly recorded; fake it
           env -C /tmp ln -sf "$PWD/etc/data/external/unity/default/tables/marksheet_uniform"
-
-      # Cache the vcpkg-built packages (OpenSSL etc.). Correctness is guaranteed by
-      # vcpkg manifest-mode reconciliation at configure time regardless of the key; the
-      # key just governs freshness. It rotates on anything that changes the dep set:
-      # vcpkg baseline, the pinned duckdb submodule (httpfs -> openssl), and the delta
-      # pin / baseline in extension_config.cmake + vcpkg.json.
-      - name: Resolve duckdb revision for cache key
-        id: duckdb_rev
-        run: echo "sha=$(git rev-parse HEAD:duckdb)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache vcpkg built packages
-        uses: actions/cache@v4
-        with:
-          path: build/release/vcpkg_installed
-          key: vcpkg-x64-linux-${{ env.VCPKG_COMMIT_ID }}-${{ steps.duckdb_rev.outputs.sha }}-${{ hashFiles('vcpkg.json', 'extension_config.cmake') }}
-          restore-keys: |
-            vcpkg-x64-linux-${{ env.VCPKG_COMMIT_ID }}-
-            vcpkg-x64-linux-
 
       - name: Build extension
         run: |
