@@ -23,6 +23,7 @@ from duckdb_pytest_driver import Fixture, find_duckdb
 from duckdb_pytest_driver.fixtures import canonicalize, load_fixture, map_columns, resolve_seed
 
 from uc import REPO_ROOT, server, uctl
+from uc.identity import TableRef, build_env  # unified identity env contract
 
 # Locally-built extensions the body needs; LOADed by full path (duckdb -unsigned).
 _EXTS = ("parquet", "httpfs", "delta", "unity_catalog")
@@ -131,20 +132,27 @@ class OssProvisioner:
 
         # RUN path: reuse the session container; instantiate each Fixture spec as a table.
         duckdb_bin = self._duckdb_cli()
-        primary = None
+        refs = []  # unified identity refs -> bindings.env (see uc.identity)
+        primary_ref = None
         for s in specs:
             if not isinstance(s.source, Fixture):
                 continue
             schema = _storage_to_schema(s.property("storage"))
             name = self._instantiate(duckdb_bin, s, schema, token, b)
-            if s.access == "rw" and primary is None:
-                primary = (schema, name)
-        if primary:
-            b.default_schema, table = primary
+            ref = TableRef(s.resolved_name(), catalog, schema, name, s.access)
+            refs.append(ref)
+            if s.access == "rw" and primary_ref is None:
+                primary_ref = ref
+        if refs:
+            if primary_ref is None:
+                primary_ref = refs[0]
+            b.default_schema = primary_ref.schema
+            # Legacy UC_TEST_* kept during migration to the unified contract; drop once ported.
             b.env = {
                 "UC_TEST_CATALOG": catalog,
                 "UC_TEST_SCHEMA": b.default_schema,
-                "UC_TEST_TABLE": table,
+                "UC_TEST_TABLE": primary_ref.table,
+                **build_env(refs, primary=primary_ref),
             }
         return b
 

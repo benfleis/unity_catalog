@@ -16,9 +16,9 @@ require-env DATABRICKS_ENDPOINT
 
 require-env DATABRICKS_REGION
 
-require-env UC_TEST_CATALOG
+require-env CATALOG
 
-require-env UC_TEST_SCHEMA
+require-env SCHEMA
 
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages
@@ -32,16 +32,16 @@ CREATE SECRET (
 );
 
 statement ok
-ATTACH '{UC_TEST_CATALOG}' AS databricks_catalog (TYPE unity_catalog, DEFAULT_SCHEMA '{UC_TEST_SCHEMA}');
+ATTACH '{CATALOG}' AS unity (TYPE unity_catalog, DEFAULT_SCHEMA '{SCHEMA}');
 
 statement ok
-USE databricks_catalog;
+USE unity;
 
 statement ok
 CALL enable_logging(level='debug');
 
 statement ok
-SET VARIABLE table_path = (FROM databricks_catalog.table_data_path('id_name'));
+SET VARIABLE table_path = (FROM unity.table_data_path('id_name'));
 
 # The provisioner seeded id_name via CREATE (empty, catalog-managed) + one INSERT of the 5
 # fixture rows -> that seed INSERT is staged commit v1. The body's writes below are v2..v6.

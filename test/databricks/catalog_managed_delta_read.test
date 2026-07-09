@@ -24,9 +24,9 @@ require-env DATABRICKS_ENDPOINT
 
 require-env DATABRICKS_REGION
 
-require-env UC_TEST_CATALOG
+require-env CATALOG
 
-require-env UC_TEST_SCHEMA
+require-env SCHEMA
 
 statement ok
 CREATE SECRET (
@@ -37,19 +37,22 @@ CREATE SECRET (
 );
 
 statement ok
-ATTACH '{UC_TEST_CATALOG}' (TYPE unity_catalog, READ_ONLY, DEFAULT_SCHEMA '{UC_TEST_SCHEMA}');
+ATTACH '{CATALOG}' AS unity (TYPE unity_catalog, READ_ONLY, DEFAULT_SCHEMA '{SCHEMA}');
+
+statement ok
+USE unity;
 
 # -----------------------------------------------------------------------------
 # id_name__cmt__spark — staged commits (server write path), needs max_catalog_version
 #
 
 query I
-SELECT count(*) FROM {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.id_name__cmt__spark;
+SELECT count(*) FROM id_name__cmt__spark;
 ----
 5
 
 query II
-SELECT id, name FROM {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.id_name__cmt__spark ORDER BY id;
+SELECT id, name FROM id_name__cmt__spark ORDER BY id;
 ----
 1	one
 2	two
@@ -62,12 +65,12 @@ SELECT id, name FROM {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.id_name__cmt__spark ORDE
 #
 
 query I
-SELECT count(*) FROM {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.id_name__cmt__duckdb;
+SELECT count(*) FROM id_name__cmt__duckdb;
 ----
 5
 
 query II
-SELECT id, name FROM {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.id_name__cmt__duckdb ORDER BY id;
+SELECT id, name FROM id_name__cmt__duckdb ORDER BY id;
 ----
 1	one
 2	two

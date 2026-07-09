@@ -2,7 +2,7 @@
 
 Paired read: @requires(access="ro") references the premade id_name__alter_colmap_id table
 (schema-evolving, columnMapping.mode=id; see test/databricks/data/) and injects
-UC_TEST_CATALOG/SCHEMA, so the body attaches + reads AT (VERSION => n) through env.
+CATALOG/SCHEMA, so the body attaches + reads AT (VERSION => n) through env.
 The read catalog is config.READ_CATALOG (env: DATABRICKS_READ_CATALOG).
 """
 

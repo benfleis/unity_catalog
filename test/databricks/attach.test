@@ -16,9 +16,9 @@ require-env DATABRICKS_ENDPOINT
 
 require-env DATABRICKS_REGION
 
-require-env UC_TEST_CATALOG
+require-env CATALOG
 
-require-env UC_TEST_SCHEMA
+require-env SCHEMA
 
 # -----------------------------------------------------------------------------
 # Attach + read via a `TYPE unity_catalog` secret. The `expected_res` label ties
@@ -34,13 +34,13 @@ CREATE OR REPLACE SECRET databricks (
 );
 
 statement ok
-ATTACH '{UC_TEST_CATALOG}' (TYPE unity_catalog, READ_ONLY, DEFAULT_SCHEMA '{UC_TEST_SCHEMA}');
+ATTACH '{CATALOG}' AS unity (TYPE unity_catalog, READ_ONLY, DEFAULT_SCHEMA '{SCHEMA}');
 
 query II nosort expected_res
-SELECT id, name FROM {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.id_name ORDER BY id;
+SELECT id, name FROM unity.{SCHEMA}.id_name ORDER BY id;
 
 statement ok
-use {UC_TEST_CATALOG}
+use unity
 
 query II nosort expected_res
 SELECT id, name FROM id_name ORDER BY id;
@@ -49,7 +49,7 @@ statement ok
 use memory
 
 statement ok
-DETACH {UC_TEST_CATALOG}
+DETACH unity
 
 # -----------------------------------------------------------------------------
 # The `TYPE UC` secret-type alias resolves identically (was aliases.test)
@@ -64,16 +64,16 @@ CREATE OR REPLACE SECRET databricks (
 );
 
 statement ok
-ATTACH '{UC_TEST_CATALOG}' (TYPE unity_catalog, READ_ONLY, DEFAULT_SCHEMA '{UC_TEST_SCHEMA}');
+ATTACH '{CATALOG}' AS unity (TYPE unity_catalog, READ_ONLY, DEFAULT_SCHEMA '{SCHEMA}');
 
 query II nosort expected_res
-SELECT id, name FROM {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.id_name ORDER BY id;
+SELECT id, name FROM unity.{SCHEMA}.id_name ORDER BY id;
 
 statement ok
 use memory
 
 statement ok
-DETACH {UC_TEST_CATALOG}
+DETACH unity
 
 # -----------------------------------------------------------------------------
 # Attach WITHOUT a default schema (FIXME: unqualified `use <catalog>` should resolve)
@@ -83,19 +83,19 @@ DETACH {UC_TEST_CATALOG}
 mode skip
 
 statement ok
-ATTACH '{UC_TEST_CATALOG}' (TYPE unity_catalog, READ_ONLY);
+ATTACH '{CATALOG}' AS unity (TYPE unity_catalog, READ_ONLY);
 
 query II nosort expected_res
-SELECT id, name FROM {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.id_name ORDER BY id;
+SELECT id, name FROM unity.{SCHEMA}.id_name ORDER BY id;
 
 # TODO: can we fix this? Or at least throw a nicer error
 statement error
-use {UC_TEST_CATALOG}
+use unity
 ----
 Catalog Error: SET schema: No catalog + schema named found.
 
 statement ok
-use {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}
+use unity.{SCHEMA}
 
 query II nosort expected_res
 SELECT id, name FROM id_name ORDER BY id;

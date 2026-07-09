@@ -2,7 +2,7 @@
 
 @requires(access="rw") seeds `id_name` into an isolated `cmt__managed__<token>` cell
 (catalog-managed commit protocol, UC-managed storage): the provisioner create+inserts the
-fixture, injects UC_TEST_CATALOG/SCHEMA into the body (run_paired env=...), and drops the cell
+fixture, injects CATALOG/SCHEMA into the body (run_paired env=...), and drops the cell
 on teardown. The body exercises the staged-commit + backfill (delta.yaml v1) protocol. The
 same @requires + provisioner also drive `pytest --cli`.
 """

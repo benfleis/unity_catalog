@@ -58,6 +58,7 @@ from databricks_gen import (  # noqa: E402  (needs _SCRIPTS_DIR on path)
 
 # Account config (S3 bucket, catalogs) -- env-overridable, in one place (see config.py).
 from . import config  # noqa: E402
+from ..identity import TableRef, build_env  # noqa: E402  (unified identity env contract)
 
 # Two definition sources the provisioner instantiates from:
 #   _FIXTURES  -- portable driver fixtures (id_name) for the write/attach tests: create + insert.
@@ -232,6 +233,7 @@ class DatabricksProvisioner:
         write_catalog = os.environ["UC_TEST_CATALOG"]  # ensure_env defaulted it (config.WRITE_CATALOG)
         bindings = Bindings(catalog=write_catalog, default_schema="main", token=token)
 
+        refs = []  # unified identity refs -> bindings.env (see uc.identity / WIP-identity-design.md)
         cell_for_default = None
         for spec in specs:
             bare = spec.resolved_name()
@@ -248,10 +250,12 @@ class DatabricksProvisioner:
                     cell_for_default = cell
                 self._instantiate(spec, target, dry_run, bindings)
                 bindings.tables.append(TableBinding(bare, target, "rw"))
+                refs.append(TableRef(bare, write_catalog, cell, bare, "rw"))
             else:
                 # ro sources are FQN strings naming a shared, premade/def table.
                 target = _expand(spec.source)
-                bindings.catalog, bindings.default_schema = _split_source(target)[:2]
+                cat, sch, tbl = _split_source(target)
+                bindings.catalog, bindings.default_schema = cat, sch
                 if target in self._shared_ro:
                     bindings.plan.append(f"[ro] {target} already provisioned this session")
                 else:
@@ -259,16 +263,19 @@ class DatabricksProvisioner:
                     if not dry_run:
                         self._shared_ro.add(target)
                 bindings.tables.append(TableBinding(bare, target, "ro"))
+                refs.append(TableRef(bare, cat, sch, tbl, "ro"))
 
         # Mono-cell default schema: the (first) rw cell if any, else the ro source schema.
         if cell_for_default is not None:
             bindings.default_schema = cell_for_default
 
-        # Env a run path injects (body reads these; see the .test).
-        bindings.env = {
-            "UC_TEST_CATALOG": bindings.catalog,
-            "UC_TEST_SCHEMA": bindings.default_schema,
-        }
+        # Primary (bare CATALOG/SCHEMA/TABLE) = the first rw cell, else the first ref.
+        primary = next((r for r in refs if r.access == "rw"), refs[0] if refs else None)
+
+        # Env a run path injects (body reads these; see the .test): the unified identity contract
+        # (CATALOG/SCHEMA/TABLE + per-key {KEY}/{KEY_*} aliases). All DB bodies are ported off the
+        # legacy UC_TEST_* keys.
+        bindings.env = build_env(refs, primary=primary)
 
         if dry_run:
             print("provision plan (NO DDL executed):")

@@ -16,9 +16,9 @@ require-env DATABRICKS_ENDPOINT
 
 require-env DATABRICKS_REGION
 
-require-env UC_TEST_CATALOG
+require-env CATALOG
 
-require-env UC_TEST_SCHEMA
+require-env SCHEMA
 
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages
@@ -32,10 +32,10 @@ CREATE SECRET (
 );
 
 statement ok
-ATTACH '{UC_TEST_CATALOG}' AS databricks_catalog (TYPE unity_catalog, DEFAULT_SCHEMA '{UC_TEST_SCHEMA}');
+ATTACH '{CATALOG}' AS unity (TYPE unity_catalog, DEFAULT_SCHEMA '{SCHEMA}');
 
 statement ok
-USE databricks_catalog;
+USE unity;
 
 # The provisioner seeded id_name (5 rows) into the cell; read it back, then round-trip an INSERT.
 query II

@@ -16,9 +16,9 @@ require-env DATABRICKS_ENDPOINT
 
 require-env DATABRICKS_REGION
 
-require-env UC_TEST_CATALOG
+require-env CATALOG
 
-require-env UC_TEST_SCHEMA
+require-env SCHEMA
 
 statement ok
 CREATE SECRET (
@@ -32,7 +32,10 @@ statement ok
 set threads=2;
 
 statement ok
-ATTACH '{UC_TEST_CATALOG}' (TYPE unity_catalog, READ_ONLY, DEFAULT_SCHEMA '{UC_TEST_SCHEMA}');
+ATTACH '{CATALOG}' AS unity (TYPE unity_catalog, READ_ONLY, DEFAULT_SCHEMA '{SCHEMA}');
+
+statement ok
+USE unity;
 
 # -----------------------------------------------------------------------------
 # Time travel across id_name__alter_colmap_id's version history
@@ -40,7 +43,7 @@ ATTACH '{UC_TEST_CATALOG}' (TYPE unity_catalog, READ_ONLY, DEFAULT_SCHEMA '{UC_T
 #
 
 query II
-SELECT id, name FROM {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.id_name__alter_colmap_id AT (VERSION => 0) ORDER BY id
+SELECT id, name FROM id_name__alter_colmap_id AT (VERSION => 0) ORDER BY id
 ----
 1	one
 2	two
@@ -49,7 +52,7 @@ SELECT id, name FROM {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.id_name__alter_colmap_id
 5	five
 
 query III
-SELECT id, name, val FROM {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.id_name__alter_colmap_id AT (VERSION => 1) ORDER BY id
+SELECT id, name, val FROM id_name__alter_colmap_id AT (VERSION => 1) ORDER BY id
 ----
 1	one	NULL
 2	two	NULL
@@ -58,7 +61,7 @@ SELECT id, name, val FROM {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.id_name__alter_colm
 5	five	NULL
 
 query III
-SELECT id, name, val FROM {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.id_name__alter_colmap_id AT (VERSION => 2) ORDER BY id
+SELECT id, name, val FROM id_name__alter_colmap_id AT (VERSION => 2) ORDER BY id
 ----
 1	one	NULL
 2	two	NULL
@@ -68,7 +71,7 @@ SELECT id, name, val FROM {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.id_name__alter_colm
 6	six	6
 
 query III
-SELECT id, name, val FROM {UC_TEST_CATALOG}.{UC_TEST_SCHEMA}.id_name__alter_colmap_id ORDER BY id
+SELECT id, name, val FROM id_name__alter_colmap_id ORDER BY id
 ----
 1	one	NULL
 2	two	NULL
