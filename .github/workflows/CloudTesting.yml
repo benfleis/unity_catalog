@@ -11,6 +11,9 @@ defaults:
     shell: bash
 env:
   VCPKG_COMMIT_ID: 84bab45d415d22042bd0b9081aea57f362da3f35
+  # Pull prebuilt vcpkg packages (OpenSSL etc.) from duckdb's hosted read-only cache
+  # instead of building them from source each run.
+  VCPKG_BINARY_SOURCES: "clear;http,https://vcpkg-cache.duckdb.org,read"
 
 jobs:
   databricks-tests-linux:
@@ -56,8 +59,8 @@ jobs:
       - name: Configure OpenSSL for Rust
         run: |
           cat >> "$GITHUB_ENV" <<EOF
-          OPENSSL_ROOT_DIR=$PWD/build/release/vcpkg_installed/x64-linux
-          OPENSSL_DIR=$PWD/build/release/vcpkg_installed/x64-linux
+          OPENSSL_ROOT_DIR="$PWD/build/release/vcpkg_installed/x64-linux"
+          OPENSSL_DIR="$PWD/build/release/vcpkg_installed/x64-linux"
           OPENSSL_USE_STATIC_LIBS=true
           EOF
 
