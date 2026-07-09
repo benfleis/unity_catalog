@@ -1,5 +1,9 @@
 name: Local functional tests
-on: [push, pull_request, repository_dispatch]
+on:
+  push:
+    branches: [main, "v[12].[0-9]+-[-a-zA-Z0-9_]+", "features/**"]
+  pull_request:
+  repository_dispatch:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
   cancel-in-progress: true
@@ -22,71 +26,95 @@ jobs:
       UC_TEST_SERVER_RUNNING: 1
       UC_TEST_DATA: "${{ github.workspace }}/unitycatalog/etc/data"
       BUILD_EXTENSION_TEST_DEPS: full
+      # sccache caches BOTH C++ (duckdb auto-detects it, CMakeLists.txt NAMES ccache sccache)
+      # and Rust (delta-kernel via RUSTC_WRAPPER); GHA backend is shared across jobs & runs.
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      CARGO_INCREMENTAL: "0" # sccache cannot cache incremental compilation
 
     steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        submodules: 'true'
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: "true"
 
-    - name: Configure OpenSSL for Rust
-      run: |
-        echo "OPENSSL_ROOT_DIR=`pwd`/build/release/vcpkg_installed/x64-linux" >> $GITHUB_ENV
-        echo "OPENSSL_DIR=`pwd`/build/release/vcpkg_installed/x64-linux" >> $GITHUB_ENV
-        echo "OPENSSL_USE_STATIC_LIBS=true" >> $GITHUB_ENV
+      - name: Configure OpenSSL for Rust
+        run: |
+          cat >> "$GITHUB_ENV" <<EOF
+          OPENSSL_ROOT_DIR=$PWD/build/release/vcpkg_installed/x64-linux
+          OPENSSL_DIR=$PWD/build/release/vcpkg_installed/x64-linux
+          OPENSSL_USE_STATIC_LIBS=true
+          EOF
 
-    - name: Install Ninja
-      shell: bash
-      run: sudo apt-get update -y -qq && sudo apt-get install -y -qq ninja-build
+      - name: Install Ninja
+        shell: bash
+        run: sudo apt-get update -y -qq && sudo apt-get install -y -qq ninja-build
 
-    - name: Setup Ccache
-      uses: hendrikmuhs/ccache-action@main
-      with:
-        key: ${{ github.job }}
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
 
-    - name: Setup vcpkg
-      uses: lukka/run-vcpkg@v11.1
-      with:
-        vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11.1
+        with:
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
 
-    - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
 
-    - uses: actions/checkout@v4
-      with:
-        repository: unitycatalog/unitycatalog
-        ref: v0.5.0
-        path: unitycatalog
+      - uses: actions/checkout@v4
+        with:
+          repository: unitycatalog/unitycatalog
+          ref: v0.5.0
+          path: unitycatalog
 
-    - name: Setup Unity Catalog test server
-      run: |
-        sudo apt install openjdk-17-jre-headless
-        cd unitycatalog
-        build/sbt package
-        bin/start-uc-server | tee uc.log &
-        sleep 15 # should be quite fast, capture initial output in GH logs
-        # some tests require manual inspection of files whose location incorrectly recorded; fake it
-        env -C /tmp ln -sf "$PWD/etc/data/external/unity/default/tables/marksheet_uniform"
+      - name: Setup Unity Catalog test server
+        run: |
+          sudo apt install openjdk-17-jre-headless
+          cd unitycatalog
+          build/sbt package
+          bin/start-uc-server | tee uc.log &
+          sleep 15 # should be quite fast, capture initial output in GH logs
+          # some tests require manual inspection of files whose location incorrectly recorded; fake it
+          env -C /tmp ln -sf "$PWD/etc/data/external/unity/default/tables/marksheet_uniform"
 
-    - name: Build extension
-      run: |
-        make release
+      # Cache the vcpkg-built packages (OpenSSL etc.). Correctness is guaranteed by
+      # vcpkg manifest-mode reconciliation at configure time regardless of the key; the
+      # key just governs freshness. It rotates on anything that changes the dep set:
+      # vcpkg baseline, the pinned duckdb submodule (httpfs -> openssl), and the delta
+      # pin / baseline in extension_config.cmake + vcpkg.json.
+      - name: Resolve duckdb revision for cache key
+        id: duckdb_rev
+        run: echo "sha=$(git rev-parse HEAD:duckdb)" >> "$GITHUB_OUTPUT"
 
-    # Seed the `duck` test catalog; requires duckdb CLI from release build above
-    - name: Seed duck test catalog
-      run: |
-        UC_REPO="$GITHUB_WORKSPACE/unitycatalog" scripts/oss_uc_local/seed_tables
+      - name: Cache vcpkg built packages
+        uses: actions/cache@v4
+        with:
+          path: build/release/vcpkg_installed
+          key: vcpkg-x64-linux-${{ env.VCPKG_COMMIT_ID }}-${{ steps.duckdb_rev.outputs.sha }}-${{ hashFiles('vcpkg.json', 'extension_config.cmake') }}
+          restore-keys: |
+            vcpkg-x64-linux-${{ env.VCPKG_COMMIT_ID }}-
+            vcpkg-x64-linux-
 
-    - name: Test extension
-      run: |
-        # confirm UC test server up
-        cat unitycatalog/uc.log
-        unitycatalog/bin/uc catalog list
-        make test_release
+      - name: Build extension
+        run: |
+          make release
+          sccache --show-stats || true
 
-    - name: Move ssl certificate to ensure we still find it
-      run: |
-        sudo mv /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem
+      # Seed the `duck` test catalog; requires duckdb CLI from release build above
+      - name: Seed duck test catalog
+        run: |
+          UC_REPO="$GITHUB_WORKSPACE/unitycatalog" scripts/oss_uc_local/seed_tables
 
-    - name: Test extension
-      run: |
-        make test_release
+      - name: Test extension
+        run: |
+          # confirm UC test server up
+          cat unitycatalog/uc.log
+          unitycatalog/bin/uc catalog list
+          make test_release
+
+      - name: Move ssl certificate to ensure we still find it
+        run: |
+          sudo mv /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem
+
+      - name: Test extension
+        run: |
+          make test_release

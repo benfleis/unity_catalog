@@ -53,7 +53,7 @@ static void AuthenticateViaBearerToken(HTTPHeaders &hdrs, const string &token) {
 	}
 }
 
-static void EnsureHttpfsExtension(shared_ptr<DatabaseInstance> db) {
+static void EnsureHttpfsExtension(const shared_ptr<DatabaseInstance> &db) {
 	// autoloading/requiring HTTPFS at this ext's Load time fails, iceberg does the same deferred load
 	if (!db) {
 		throw InvalidConfigurationException("Context does not have database instance");
@@ -117,11 +117,6 @@ static uint64_t TryGetNumFromObject(duckdb_yyjson::yyjson_val *obj, const string
                                     uint64_t default_val = 0) {
 	return TemplatedTryGetYYJson<uint64_t, YYJSON_TYPE_NUM, duckdb_yyjson::yyjson_get_uint>(obj, field, default_val,
 	                                                                                        fail_on_missing);
-}
-static bool TryGetBoolFromObject(duckdb_yyjson::yyjson_val *obj, const string &field, bool fail_on_missing = false,
-                                 bool default_val = false) {
-	return TemplatedTryGetYYJson<bool, YYJSON_TYPE_BOOL, duckdb_yyjson::yyjson_get_bool>(obj, field, default_val,
-	                                                                                     fail_on_missing);
 }
 static string TryGetStrFromObject(duckdb_yyjson::yyjson_val *obj, const string &field, bool fail_on_missing = true,
                                   const char *default_val = "") {

@@ -25,6 +25,11 @@ jobs:
       BUILD_EXTENSION_TEST_DEPS: full
       DATABRICKS_WRITE_TEST_CATALOG: duckdb_write_testing
       RUN_WRITE_TESTS: 1
+      # sccache caches BOTH C++ (duckdb auto-detects it, CMakeLists.txt NAMES ccache sccache)
+      # and Rust (delta-kernel via RUSTC_WRAPPER); GHA backend is shared across jobs & runs.
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      CARGO_INCREMENTAL: "0" # sccache cannot cache incremental compilation
 
     steps:
       - name: Install required ubuntu packages
@@ -38,12 +43,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          submodules: 'true'
+          submodules: true
 
-      - name: Setup Ccache
-        uses: hendrikmuhs/ccache-action@v1.2.11 # Note: pinned due to GLIBC incompatibility in later releases
-        with:
-          key: ${{ github.job }}-${{ matrix.duckdb_arch }}
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11.1
@@ -52,43 +55,65 @@ jobs:
 
       - name: Configure OpenSSL for Rust
         run: |
-          echo "OPENSSL_ROOT_DIR=`pwd`/build/release/vcpkg_installed/x64-linux" >> $GITHUB_ENV
-          echo "OPENSSL_DIR=`pwd`/build/release/vcpkg_installed/x64-linux" >> $GITHUB_ENV
-          echo "OPENSSL_USE_STATIC_LIBS=true" >> $GITHUB_ENV
+          cat >> "$GITHUB_ENV" <<EOF
+          OPENSSL_ROOT_DIR=$PWD/build/release/vcpkg_installed/x64-linux
+          OPENSSL_DIR=$PWD/build/release/vcpkg_installed/x64-linux
+          OPENSSL_USE_STATIC_LIBS=true
+          EOF
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
       - uses: databricks/setup-cli@main
-        
+
       - name: Setup credentials
         uses: 1password/load-secrets-action@v3
         with:
           export-env: true
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          DATABRICKS_TOKEN: 'op://testing-rw/databricks_ccv2/token'
-          DATABRICKS_ENDPOINT: 'op://testing-rw/databricks_ccv2/endpoint'
-          DATABRICKS_REGION: 'op://testing-rw/databricks_ccv2/aws_region'
+          DATABRICKS_TOKEN: "op://testing-rw/databricks_ccv2/token"
+          DATABRICKS_ENDPOINT: "op://testing-rw/databricks_ccv2/endpoint"
+          DATABRICKS_REGION: "op://testing-rw/databricks_ccv2/aws_region"
 
       - name: Create Databricks config
         run: |
           echo "[DEFAULT]" > ~/.databrickscfg
           echo "host = $DATABRICKS_ENDPOINT" >> ~/.databrickscfg
           echo "token = $DATABRICKS_TOKEN" >> ~/.databrickscfg
-          cat ~/.databrickscfg
+          head -2 ~/.databrickscfg
 
       - name: Generate random schema name
         run: |
-          echo "DATABRICKS_WRITE_TEST_SCHEMA=test_schema_$(uuidgen | tr '[:upper:]' '[:lower:]' | tr '-' '_')" >> $GITHUB_ENV
+          echo "DATABRICKS_WRITE_TEST_SCHEMA=test_schema_$(uuidgen | tr '[:upper:]' '[:lower:]' | tr '-' '_')" >> "$GITHUB_ENV"
 
       - name: Prepare write tests
         run: |
           make write_tests_prepare
 
+      # Cache the vcpkg-built packages (OpenSSL etc.). Correctness is guaranteed by
+      # vcpkg manifest-mode reconciliation at configure time regardless of the key; the
+      # key just governs freshness. It rotates on anything that changes the dep set:
+      # vcpkg baseline, the pinned duckdb submodule (httpfs -> openssl), and the delta
+      # pin / baseline in extension_config.cmake + vcpkg.json. Same key as LocalTesting
+      # (identical triplet + extension set) so the two jobs share one cache.
+      - name: Resolve duckdb revision for cache key
+        id: duckdb_rev
+        run: echo "sha=$(git rev-parse HEAD:duckdb)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache vcpkg built packages
+        uses: actions/cache@v4
+        with:
+          path: build/release/vcpkg_installed
+          key: vcpkg-x64-linux-${{ env.VCPKG_COMMIT_ID }}-${{ steps.duckdb_rev.outputs.sha }}-${{ hashFiles('vcpkg.json', 'extension_config.cmake') }}
+          restore-keys: |
+            vcpkg-x64-linux-${{ env.VCPKG_COMMIT_ID }}-
+            vcpkg-x64-linux-
+
       - name: Build extension
         run: |
           make release
+          sccache --show-stats || true
 
       - name: Run tests
         run: |
