@@ -1,4 +1,5 @@
 #include "duckdb/common/exception.hpp"
+#include "duckdb/transaction/transaction_manager.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
@@ -6,6 +7,7 @@
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/parser/parsed_data/attach_info.hpp"
 #include "duckdb/storage/storage_extension.hpp"
+#include "duckdb/logging/logger.hpp"
 
 #include "storage/unity_catalog.hpp"
 #include "storage/uc_transaction_manager.hpp"
@@ -27,7 +29,7 @@ static unique_ptr<BaseSecret> CreateUCSecretFunction(ClientContext &, CreateSecr
 		name = "unity_catalog";
 	}
 
-	auto result = make_uniq<KeyValueSecret>(prefix_paths, name, "config", input.name);
+	auto result = make_uniq<KeyValueSecret>(prefix_paths, Identifier(name), "config", input.name);
 	for (const auto &named_param : input.options) {
 		auto lower_name = StringUtil::Lower(named_param.first);
 

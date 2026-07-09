@@ -28,9 +28,11 @@ static CheckpointTableBindData ResolveTableName(ClientContext &context, const st
 	auto &search_path = ClientData::Get(context).catalog_search_path->GetDefault();
 
 	CheckpointTableBindData result;
-	result.catalog_name = qname.catalog.empty() ? search_path.catalog : qname.catalog;
-	result.schema_name = qname.schema.empty() ? search_path.schema : qname.schema;
-	result.table_name = qname.name;
+	result.catalog_name =
+	    qname.Catalog().empty() ? search_path.GetCatalog().GetIdentifierName() : qname.Catalog().GetIdentifierName();
+	result.schema_name =
+	    qname.Schema().empty() ? search_path.GetSchema().GetIdentifierName() : qname.Schema().GetIdentifierName();
+	result.table_name = qname.Name().GetIdentifierName();
 
 	if (result.catalog_name.empty()) {
 		throw InvalidInputException(
@@ -64,8 +66,9 @@ static void CheckpointTableFunction(ClientContext &context, TableFunctionInput &
 	data.finished = true;
 
 	CatalogEntryRetriever catalog_entry_retriever(context);
-	EntryLookupInfo lookup_table = {CatalogType::TABLE_ENTRY, data.table_name};
-	auto tbl_entry = catalog_entry_retriever.GetEntry(data.catalog_name, data.schema_name, lookup_table);
+	EntryLookupInfo lookup_table(CatalogType::TABLE_ENTRY, Identifier(data.table_name));
+	auto tbl_entry =
+	    catalog_entry_retriever.GetEntry(Identifier(data.catalog_name), Identifier(data.schema_name), lookup_table);
 	if (!tbl_entry) {
 		throw InvalidInputException("Unity Catalog table not found: '%s.%s.%s'", data.catalog_name, data.schema_name,
 		                            data.table_name);

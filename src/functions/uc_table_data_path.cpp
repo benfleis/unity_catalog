@@ -27,7 +27,7 @@ static unique_ptr<FunctionData> UCTableDataPathBind(ClientContext &context, Tabl
 
 	auto table_name = input.inputs[0].GetValue<string>();
 
-	EntryLookupInfo lookup_info(CatalogType::TABLE_ENTRY, table_name);
+	EntryLookupInfo lookup_info(CatalogType::TABLE_ENTRY, Identifier(table_name));
 	auto entry = schema.tables.GetEntry(context, lookup_info);
 	if (!entry) {
 		throw BinderException("table_data_path: table '%s' not found", table_name);

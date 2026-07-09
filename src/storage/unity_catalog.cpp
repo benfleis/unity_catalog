@@ -1,4 +1,6 @@
 #include "storage/unity_catalog.hpp"
+#include "duckdb/planner/logical_operator.hpp"
+#include "duckdb/execution/physical_plan_generator.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/parser/parsed_data/attach_info.hpp"
@@ -28,7 +30,7 @@ optional_ptr<CatalogEntry> UnityCatalog::CreateSchema(CatalogTransaction transac
 	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
 		DropInfo try_drop;
 		try_drop.type = CatalogType::SCHEMA_ENTRY;
-		try_drop.name = info.schema;
+		try_drop.SetName(info.GetQualifiedName().Schema());
 		try_drop.if_not_found = OnEntryNotFound::RETURN_NULL;
 		try_drop.cascade = false;
 		schemas.DropEntry(transaction.GetContext(), try_drop);
@@ -54,7 +56,7 @@ optional_ptr<SchemaCatalogEntry> UnityCatalog::LookupSchema(CatalogTransaction t
 			    "specify a DEFAULT_SCHEMA on ATTACH: `ATTACH '..' (TYPE unity_catalog, DEFAULT_SCHEMA 'my_schema')`",
 			    GetName());
 		}
-		return GetSchema(transaction, default_schema, if_not_found);
+		return GetSchema(transaction, Identifier(default_schema), if_not_found);
 	}
 	auto entry = schemas.GetEntry(transaction.GetContext(), schema_lookup);
 	if (!entry && if_not_found != OnEntryNotFound::RETURN_NULL) {

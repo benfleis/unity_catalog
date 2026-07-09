@@ -1,4 +1,5 @@
 #include "storage/unity_catalog.hpp"
+#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "storage/uc_schema_entry.hpp"
 #include "storage/uc_table_entry.hpp"
 #include "storage/uc_table_set.hpp"
@@ -40,7 +41,7 @@ TableFunction UCTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 	table.InternalAttach(context);
 
 	auto &delta_catalog = *table.GetInternalCatalog();
-	auto &schema = delta_catalog.GetSchema(context, DEFAULT_SCHEMA);
+	auto &schema = delta_catalog.GetSchema(context, Identifier::DefaultSchema());
 	auto transaction = schema.GetCatalogTransaction(context);
 	auto table_entry = schema.LookupEntry(transaction, lookup_info);
 	D_ASSERT(table_entry);
