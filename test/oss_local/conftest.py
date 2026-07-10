@@ -12,7 +12,12 @@ import pytest
 
 from driver import register_provisioner
 from uc.oss import OssProvisioner
-from uc.server import teardown_shared, uc_server  # noqa: F401  (uc_server re-exported dir-wide)
+from uc.server import (  # noqa: F401  (uc_server re-exported dir-wide)
+    _invocation_id,
+    reclaim_stale,
+    teardown_shared,
+    uc_server,
+)
 
 _OSS_DIR = pathlib.Path(__file__).parent
 
@@ -28,6 +33,23 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "oss_local: OSS-local UC tests (uc_server container)."
     )
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionstart(session):
+    """Controller-only, BEFORE any worker races the start-lock: reclaim a container/state/lock leaked
+    by a prior interrupted/killed run. This is the ROBUST recovery net -- under xdist, Ctrl-C is owned
+    by xdist and pytest_keyboard_interrupt/atexit don't reliably fire on the controller, so rather
+    than try to tear down on the way out, we clean up any leak at the NEXT session start.
+
+    trylast so xdist's own sessionstart has set up the worker nodes (and, via pytest_configure_node,
+    computed this run's shared run-id on the controller config) -- so _invocation_id() returns the
+    real id rather than the "single" fallback.
+    """
+    config = session.config
+    if getattr(config, "workerinput", None) is not None:
+        return  # worker: never reclaims the shared container
+    reclaim_stale(_invocation_id(config))
 
 
 def pytest_sessionfinish(session, exitstatus):

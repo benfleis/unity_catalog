@@ -61,7 +61,9 @@ ENDPOINT = f"http://127.0.0.1:{PORT}"
 _CATALOG = "duck"
 _SEED_SCHEMAS = ("cmt", "plain")  # entrypoint seeds these after the catalog
 _READY_URL = f"{ENDPOINT}/api/2.1/unity-catalog/schemas?catalog_name={_CATALOG}"
-_READY_TIMEOUT_S = 120
+# A healthy boot+seed is a few seconds; 45s is a generous ceiling that still FAILS FAST instead of
+# masking a hang (a wedged boot under the start-lock blocks every OSS worker). Override if needed.
+_READY_TIMEOUT_S = int(os.environ.get("UC_DUCK_READY_TIMEOUT_S", "45"))
 
 
 @dataclass(frozen=True)
@@ -98,7 +100,8 @@ def _wait_ready(timeout_s):
             last = repr(e)
         time.sleep(1)
     raise RuntimeError(
-        f"OSS UC not ready at {_READY_URL} after {timeout_s}s "
+        f"OSS UC container {CONTAINER!r} failed to become ready on port {PORT} "
+        f"({_READY_URL}) after {timeout_s}s "
         f"(need schemas {list(_SEED_SCHEMAS)} in catalog {_CATALOG!r}): {last}"
     )
 
@@ -156,7 +159,11 @@ def stop_container(data_dir=None):
 # from a prior run is replaced (ALWAYS_CREATE), not reused.
 _STATE_PATH = os.path.join(tempfile.gettempdir(), f"{CONTAINER}.state.json")
 _LOCK_PATH = os.path.join(tempfile.gettempdir(), f"{CONTAINER}.start.lock")
-_LOCK_STALE_S = _READY_TIMEOUT_S + 60  # steal a lock held longer than a full boot (crashed holder)
+# Steal a lock held longer than one full boot+wait (a holder that crashed mid-boot). Tracks
+# _READY_TIMEOUT_S so shortening the wait shortens the worst-case steal delay too. reclaim_stale()
+# already deletes a leaked lock at controller session start, so peers almost never hit this timed
+# steal -- it's the fallback for an intra-run crash.
+_LOCK_STALE_S = _READY_TIMEOUT_S + 60
 
 
 class _StartLock:
@@ -226,17 +233,53 @@ def _ensure_shared_container(invocation_id):
         return srv
 
 
+def reclaim_stale(invocation_id):
+    """Controller-only, BEFORE workers race the start-lock: remove a container / state / lock file
+    leaked by a prior *interrupted* run, so this run's first fresh boot never races a dying container
+    (whose not-yet-released port stalls docker-run's rebind) or blocks on a stale lock file.
+
+    Idempotent + safe when nothing leaked. A leak is a state file tagged with a *different*
+    invocation, or a running container with no state at all. A state file tagged with THIS invocation
+    is left untouched -- this run hasn't booted yet, so there is nothing of ours to race.
+    """
+    info = _read_state()
+    leaked = (info is not None and info.get("invocation") != invocation_id) or (
+        info is None and _container_running()
+    )
+    if not leaked:
+        return
+    with step("reclaiming leaked OSS UC container from an interrupted run"):
+        _docker("rm", "-f", CONTAINER, check=False)  # running or stopped -> gone; frees the port early
+    if info and info.get("data_dir"):
+        shutil.rmtree(info["data_dir"], ignore_errors=True)
+    for p in (_STATE_PATH, _LOCK_PATH):
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
+
+
+_torn_down = False
+
+
 def teardown_shared():
-    """Stop + clean the shared container. Controller-only (conftest pytest_sessionfinish); the
-    container is shared, so it must outlive every worker that used it. No-op if never started."""
+    """Stop + clean the shared container at NORMAL session end (controller pytest_sessionfinish).
+    Interrupted/killed runs don't reach here (xdist owns SIGINT); those leaks are recovered by
+    reclaim_stale() at the next session start. Idempotent (safe if ever called twice); drops the
+    start-lock + state so a completed run leaves nothing behind."""
+    global _torn_down
+    if _torn_down:
+        return
+    _torn_down = True
     info = _read_state()
     if not info:
         return
     stop_container(info.get("data_dir"))
-    try:
-        os.unlink(_STATE_PATH)
-    except OSError:
-        pass
+    for p in (_STATE_PATH, _LOCK_PATH):
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
 
 
 @pytest.fixture(scope="session")
