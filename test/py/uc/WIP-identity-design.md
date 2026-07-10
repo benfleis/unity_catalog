@@ -158,7 +158,16 @@ live `-n auto` run to confirm parallel distribution + single container.
 | Why | secret (off-disk), fast, always-needed, deterministic | heavy, conditional, parallel boot |
 | Backbone | *compute-once → make-available-to-all-workers* (one primitive, two policies) |
 
-**Credentials — NEXT (part b), design fixed:**
+**Credentials — DONE (part b).** Driver: `register_broadcast(config,key,factory)` /
+`get_broadcast(config,key,default)` (plugin.py) — factory computes ONCE on the controller (cached),
+`pytest_configure_node` broadcasts every registered key via `workerinput`; run-id is consumer #1,
+creds #2. Exported from `driver`; offline self-test `tests/test_broadcast.py` (27 pass). UC:
+`engine.load_creds` (env-wins **per var**, `op` fills only gaps — a partial override like a personal
+TOKEN survives; complete env → no op; op-unavailable partial → skip) + `_op_fetch`; `test/databricks/conftest.py`
+`register_broadcast(..., load_creds)` + `os.environ.update(get_broadcast(...))`. Stale PYTEST.md refs
+removed. **Verify live:** `run_databricks_env pytest test/databricks` (env path, no `op`) AND bare
+`pytest test/databricks` (controller `op`-fetch once → broadcast). Two-repo change (driver + uc).
+Design that got us here:
 - Supersedes the prior decision (front-load via `run_databricks_env`, "never fetch in-process — wrong
   under xdist"). That was right about *per-worker* `op`; the fix is **controller-fetch-once +
   broadcast** — the in-process pattern the old decision lacked. (Stale `PYTEST.md` ref in

@@ -157,39 +157,97 @@ def _split_source(source_fqn: str):
 # ---------------------------------------------------------------------------
 
 _CRED_VARS = ("DATABRICKS_TOKEN", "DATABRICKS_ENDPOINT", "DATABRICKS_REGION")
+_LAST_OP_ERROR = None  # op's error from the last _op_fetch (controller) -- for the hard-fail message
+
+
+def have_core_creds():
+    """True if the core creds (TOKEN/ENDPOINT/REGION) are in the environment."""
+    return all(os.environ.get(k) for k in _CRED_VARS)
+
+
+def cred_failure_detail():
+    """Why creds are unavailable: op's (sanitized) error if op ran and failed, else the missing env
+    vars. Feeds the conftest's hard-fail message."""
+    if _LAST_OP_ERROR:
+        return _LAST_OP_ERROR
+    missing = [k for k in _CRED_VARS if not os.environ.get(k)]
+    return "not in the environment: " + ", ".join(missing) if missing else "unavailable"
 
 
 def _require_creds():
-    """Raise unless DATABRICKS_{TOKEN,ENDPOINT,REGION} are already in the environment.
+    """Raise pytest.UsageError unless the core creds are in the environment.
 
-    Creds are a RUN-scoped resource: the launching shell front-loads them
-    (`scripts/run_databricks_env pytest …`, or `op run -- pytest …`); pytest does NOT
-    fetch them. Fetching from inside pytest pops 1Password once per xdist worker
-    (separate processes, per-process state) and has no clean once-before-fork home —
-    see test/py/driver/PYTEST.md ("global, once, before any worker"). So we only
-    verify here; the conftest hook turns this UsageError into a graceful skip.
+    Creds are fetched once on the controller (load_creds: env-wins, else 1Password) + broadcast to
+    workers; the conftest hard-fails when they're unavailable. This is the --cli-path guard.
     """
-    missing = [k for k in _CRED_VARS if not os.environ.get(k)]
-    if missing:
-        raise pytest.UsageError(
-            f"Databricks creds not set: {', '.join(missing)}. Front-load them in the "
-            "launching shell, e.g. `scripts/run_databricks_env pytest …` (or "
-            "`op run -- pytest …`)."
-        )
+    if not have_core_creds():
+        raise pytest.UsageError(f"Databricks credentials unavailable ({cred_failure_detail()}).")
 
 
 def ensure_env(*, dry_run=False):
     """Make the Databricks env ready for a test or a provision step.
 
     Catalog default (cheap, always) + a creds CHECK (skipped on dry_run so
-    --co / --provision-dry-run never need creds). The creds themselves come from the
-    launching shell, not from pytest — see _require_creds / PYTEST.md. Safe to call
-    repeatedly. The conftest hook calls this so the run path (run_paired) gets the
-    catalog default + the creds check; --cli calls it too.
+    --co / --provision-dry-run never need creds). Creds are populated once on the controller and
+    broadcast to workers (see load_creds + the conftest); this only verifies. Safe to call
+    repeatedly. The conftest hook calls this so the run path (run_paired) gets the catalog
+    default + the creds check; --cli calls it too.
     """
     _default_catalog_env()
     if not dry_run:
         _require_creds()
+
+
+# The 1Password item holding the databricks _env bundle (TOKEN/ENDPOINT/REGION/WAREHOUSE_ID),
+# and the full var set (warehouse is write-path only, so not in the _require_creds core check).
+_OP_CRED_SECRET = "op://testing-rw/databricks_ccv2/_env"
+_ENV_VARS = _CRED_VARS + ("DATABRICKS_WAREHOUSE_ID",)
+
+
+def load_creds(config=None):
+    """Databricks creds as a {VAR: value} dict, fetched ONCE (called on the controller via the
+    driver broadcast seam; `config` unused, matches the factory signature).
+
+    Env-set vars ALWAYS win, per variable; 1Password fills only the gaps:
+      - all core (TOKEN/ENDPOINT/REGION) in env -> return env, NO `op` (the wrapper / CI path);
+      - any core missing -> fetch the bundle, then overlay whatever env DID set, so a PARTIAL
+        override survives (e.g. a personal TOKEN with ENDPOINT/REGION/WAREHOUSE from 1Password).
+    If `op` is unavailable the result is just the env partials -> _require_creds then skips.
+    """
+    env = {k: os.environ[k] for k in _ENV_VARS if os.environ.get(k)}
+    if all(k in env for k in _CRED_VARS):
+        return env  # complete from env -> no op
+    return {**_op_fetch(), **env}  # op fills the gaps; env wins per-var
+
+
+def _op_fetch():
+    """`op read <_env> | op inject`, parsed into {VAR: value}. Runs only when creds aren't already
+    in the env, only on the controller. On failure returns {} and stashes op's (sanitized) error in
+    _LAST_OP_ERROR so the conftest hard-fail can show WHY creds are unavailable.
+    """
+    global _LAST_OP_ERROR
+    cmd = f"op read {_OP_CRED_SECRET} | op inject"
+    try:
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:
+        _LAST_OP_ERROR = f"`op` could not run: {e}"
+        return {}
+    if r.returncode != 0:
+        detail = (r.stderr or r.stdout or "").strip() or f"op exited {r.returncode}"
+        _LAST_OP_ERROR = f"`op` exit {r.returncode}: {detail}"
+        return {}
+    _LAST_OP_ERROR = None
+    creds = {}
+    for line in r.stdout.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        if s.startswith("export "):
+            s = s[len("export "):].lstrip()
+        key, sep, val = s.partition("=")
+        if sep:
+            creds[key.strip()] = val.strip().strip("\"'")
+    return creds
 
 
 # ---------------------------------------------------------------------------
