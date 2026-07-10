@@ -11,9 +11,10 @@ Chosen policy: always-fresh per session.
   destroy      = ALWAYS_DESTROY (stop it at session end)
 Isolation is by-lifecycle (recreate fresh, fixed name/port) -- cheap for local UC.
 
-NOTE (xdist): this is session-scoped on a fixed port, so it assumes a single worker for
-the tests that use it. Under `-n auto` run these in one xdist_group (or `-p no:xdist`)
-until per-worker isolation is added.
+NOTE (xdist): ONE shared container per invocation across all workers. It's a host singleton
+(fixed name/port), booted first-worker-wins under a filesystem lock and torn down once by the
+controller (oss_local/conftest.py pytest_sessionfinish) so it outlives every worker using it.
+No xdist_group / single-worker pinning needed -- OSS tests distribute normally.
 """
 
 import json
@@ -145,19 +146,118 @@ def stop_container(data_dir=None):
             shutil.rmtree(data_dir, ignore_errors=True)
 
 
+# --- shared-container coordination (first-worker-wins across xdist workers) ----------------
+#
+# The container is a host singleton (fixed name/port) started ONCE per invocation and shared by
+# all workers: the first worker to need it wins a filesystem lock and boots it; the rest block on
+# the lock, then reuse. Teardown is the controller's job (see conftest pytest_sessionfinish) so the
+# container outlives every worker. State/lock live at fixed host paths keyed by the container name
+# (its host-singleton nature); the invocation id (driver run-id) tags state so a stale container
+# from a prior run is replaced (ALWAYS_CREATE), not reused.
+_STATE_PATH = os.path.join(tempfile.gettempdir(), f"{CONTAINER}.state.json")
+_LOCK_PATH = os.path.join(tempfile.gettempdir(), f"{CONTAINER}.start.lock")
+_LOCK_STALE_S = _READY_TIMEOUT_S + 60  # steal a lock held longer than a full boot (crashed holder)
+
+
+class _StartLock:
+    """Minimal cross-process mutex (no filelock dep): O_EXCL create = held, unlink = released.
+    Steals a lock file older than _LOCK_STALE_S (a holder that crashed mid-boot)."""
+
+    def __enter__(self):
+        while True:
+            try:
+                fd = os.open(_LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(fd, str(os.getpid()).encode())
+                os.close(fd)
+                return self
+            except FileExistsError:
+                try:
+                    if time.time() - os.path.getmtime(_LOCK_PATH) > _LOCK_STALE_S:
+                        os.unlink(_LOCK_PATH)  # crashed holder -> steal
+                        continue
+                except OSError:
+                    pass
+                time.sleep(0.2)
+
+    def __exit__(self, *exc):
+        try:
+            os.unlink(_LOCK_PATH)
+        except OSError:
+            pass
+        return False
+
+
+def _invocation_id(config):
+    """This invocation's shared id (the driver run-id): identical on controller + all workers."""
+    wi = getattr(config, "workerinput", None)
+    if wi and "sqllogic_run_id" in wi:
+        return wi["sqllogic_run_id"]
+    return getattr(config, "_sqllogic_run_id", None) or "single"
+
+
+def _container_running():
+    r = _docker("inspect", "-f", "{{.State.Running}}", CONTAINER, check=False)
+    return r.returncode == 0 and r.stdout.strip() == "true"
+
+
+def _read_state():
+    try:
+        with open(_STATE_PATH) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _ensure_shared_container(invocation_id):
+    """Return the ONE shared UcServer for this invocation, booting it (under the lock) iff no live
+    container for this invocation exists yet. First-worker-wins: losers block on the lock, then
+    reuse the winner's container."""
+    with _StartLock():
+        info = _read_state()
+        if info and info.get("invocation") == invocation_id and _container_running():
+            return UcServer(endpoint=info["endpoint"], container=info["container"], data_dir=info["data_dir"])
+        srv = start_container()  # ALWAYS_CREATE: docker rm -f first -> fresh + ready before we publish
+        with open(_STATE_PATH, "w") as f:
+            json.dump(
+                {"invocation": invocation_id, "endpoint": srv.endpoint,
+                 "container": srv.container, "data_dir": srv.data_dir},
+                f,
+            )
+        return srv
+
+
+def teardown_shared():
+    """Stop + clean the shared container. Controller-only (conftest pytest_sessionfinish); the
+    container is shared, so it must outlive every worker that used it. No-op if never started."""
+    info = _read_state()
+    if not info:
+        return
+    stop_container(info.get("data_dir"))
+    try:
+        os.unlink(_STATE_PATH)
+    except OSError:
+        pass
+
+
 @pytest.fixture(scope="session")
-def uc_server():
-    """Provision/acquire the OSS UC server resource per OSS_UC_SERVER (see module docstring)."""
+def uc_server(request):
+    """Acquire the ONE shared OSS UC server for this invocation (first-worker-wins).
+
+    Per OSS_UC_SERVER: ALWAYS_CREATE (fresh per invocation) / ALWAYS_DESTROY (the controller tears
+    it down at session end). Shared across xdist workers via a filesystem lock, so OSS tests
+    distribute normally -- no xdist_group.
+    """
     spec = OSS_UC_SERVER
     assert (
         spec.create == "ALWAYS_CREATE" and spec.destroy == "ALWAYS_DESTROY"
     ), f"only ALWAYS_CREATE/ALWAYS_DESTROY is wired today; got {spec}"
 
+    srv = _ensure_shared_container(_invocation_id(request.config))
     global _ACTIVE_SERVER
-    srv = start_container()
     _ACTIVE_SERVER = srv  # publish for OssProvisioner (run path reuses this container)
     try:
         yield srv
     finally:
         _ACTIVE_SERVER = None
-        stop_container(srv.data_dir)
+        # No stop here: the container is shared across workers; the controller stops it once at
+        # pytest_sessionfinish (oss_local/conftest.py).

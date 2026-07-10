@@ -121,6 +121,66 @@ templates (pytest supplies defaults via config.py). Internal contract = the shor
 - De-overload `cmt`/`plain`: keep `properties={commit,storage}` abstract; document each backend's
   property→physical mapping.
 
+## Service lifecycle: invocation-scoped, shared across workers ✅ (OSS done)
+
+**Mental vs execution model:** pytest "session" = one pytest *process* → under xdist, **per-worker**,
+NOT per-invocation. So a `scope="session"` service = one-per-worker; the old `xdist_group` pinned
+all OSS tests to one worker as a workaround (→ serialized OSS). Correct model: **one service per
+invocation, shared by all workers, isolation logical (cell/schema/path)** — exactly how Databricks
+already behaves.
+
+**xdist comms** (what's possible when): controller `pytest_configure` (pre-fork, guard
+`not hasattr(config,"workerinput")`) → broadcast via `pytest_configure_node` → `node.workerinput`
+(top-down, picklable, at worker init); during run, workers only report *back* (no controller→worker
+push, no worker↔worker); filesystem+lock is the sideways escape hatch. Driver already broadcasts the
+run-id this way (`_run_id`/`workerinput["sqllogic_run_id"]`).
+
+**Two provisioning styles:**
+- **Top-down** (controller `configure` + broadcast): serial/upfront, deterministic, secrets stay in
+  memory. Best for **credentials** (fast, always-needed, secret).
+- **First-worker-wins** (lock + shared state): the first worker to request a service boots it (behind
+  a lock); dependents block on the fixture until up; **different services boot in parallel**, lazily,
+  overlapped with tests. Best for **services** (heavy, conditional, parallel).
+
+**OSS service — DONE (first-worker-wins):** `server.py` — one shared container per invocation,
+booted under a no-dep `O_EXCL` lock (`_StartLock`), state at fixed host paths keyed by container
+name, tagged with the invocation id (run-id) so a stale prior container is replaced (ALWAYS_CREATE).
+Fixture no longer stops the container; **controller `pytest_sessionfinish` tears it down once**
+(outlives all workers). **`xdist_group` dropped** → OSS tests distribute across workers. Needs a
+live `-n auto` run to confirm parallel distribution + single container.
+
+**Two classes of global (invocation-level) resource — same backbone, different scheduling:**
+
+| | Class 1: credentials | Class 2: services |
+|---|---|---|
+| When | controller, pre-fork, upfront | first worker that needs it, scheduled |
+| Mechanism | top-down `workerinput` broadcast | filesystem lock + shared state |
+| Why | secret (off-disk), fast, always-needed, deterministic | heavy, conditional, parallel boot |
+| Backbone | *compute-once → make-available-to-all-workers* (one primitive, two policies) |
+
+**Credentials — NEXT (part b), design fixed:**
+- Supersedes the prior decision (front-load via `run_databricks_env`, "never fetch in-process — wrong
+  under xdist"). That was right about *per-worker* `op`; the fix is **controller-fetch-once +
+  broadcast** — the in-process pattern the old decision lacked. (Stale `PYTEST.md` ref in
+  `test/databricks/conftest.py` + `engine.py` to remove.)
+- Flow: controller `pytest_configure` (guard `not hasattr(config,"workerinput")`) loads creds once —
+  **prefer env** (wrapper/CI already set them → no `op`), else run `op read op://testing-rw/
+  databricks_ccv2/_env | op inject` once + parse. Broadcast via `pytest_configure_node` →
+  `workerinput["databricks_creds"]`. Workers `os.environ.update(...)`. Downstream unchanged
+  (`ensure_env`/`_require_creds`/body `{DATABRICKS_TOKEN}` read env); missing/failed `op` → skip.
+  Cred vars: `DATABRICKS_{TOKEN,ENDPOINT,REGION,WAREHOUSE_ID}`.
+- **WHERE = the driver.** A subtree conftest's `pytest_configure_node` fires for `pytest
+  test/databricks` (initial conftest) but NOT `pytest test` (loaded lazily, after workers spawn).
+  The driver plugin's `configure_node` **always** fires (that's why run-id broadcast lives there). So
+  build a **generic broadcast seam in the driver** ("controller computes once → broadcast to
+  workers"): run-id is consumer #1, creds #2 (justifies generalizing). UC supplies only the op-fetch.
+  Makes bare `pytest test/databricks` wrapper-free; `run_databricks_env` op-exports become optional
+  overrides (ties to step 6 env translation).
+
+This is the concrete form of the `Backend`/`Service` layer in step B: **invocation-scoped + shared**;
+minio/azurite/OSS-UC are the same shape (ambient, addressable, logically partitioned), and their
+creds ride the same driver broadcast seam.
+
 ## B — driver Provisioner base (the "demo") ⏭
 
 Two abstractions, both into the driver:

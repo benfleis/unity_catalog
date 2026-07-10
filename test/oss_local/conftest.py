@@ -1,9 +1,9 @@
 """Shared fixtures for oss_local tests.
 
-`uc_server` (session-scoped) is registered here -- once for the whole oss_local dir --
-so every test shares ONE OSS UC container per run. A fixture *imported into* each test
-module is registered once per module, so a "session" fixture would otherwise start a
-container per file.
+`uc_server` is registered here -- once for the whole oss_local dir -- so every test shares ONE
+OSS UC container per invocation. The container is booted first-worker-wins (shared across xdist
+workers; see uc.server) and torn down once by the controller in pytest_sessionfinish below, so
+OSS tests distribute across workers normally -- no xdist_group pinning.
 """
 
 import pathlib
@@ -12,7 +12,7 @@ import pytest
 
 from driver import register_provisioner
 from uc.oss import OssProvisioner
-from uc.server import uc_server  # noqa: F401  -- re-exported as a dir-wide fixture
+from uc.server import teardown_shared, uc_server  # noqa: F401  (uc_server re-exported dir-wide)
 
 _OSS_DIR = pathlib.Path(__file__).parent
 
@@ -30,24 +30,24 @@ def pytest_configure(config):
     )
 
 
-@pytest.hookimpl(tryfirst=True)
-def pytest_collection_modifyitems(items):
-    """Pin every oss_local test to one xdist worker.
+def pytest_sessionfinish(session, exitstatus):
+    """Tear down the shared OSS UC container once, on the controller only.
 
-    `uc_server` is session-scoped on a fixed name/port, so it assumes a single worker.
-    Tagging the dir's items with a shared xdist_group makes the default
-    `--dist=loadgroup` co-locate them on one worker -- one container, no port
-    collision -- so a bare `pytest` (`-n auto`) just works without `-n0`. (Items
-    outside this dir, e.g. databricks, are left ungrouped and distribute normally.)
-
-    tryfirst is REQUIRED: xdist's own pytest_collection_modifyitems (worker-side,
-    xdist/remote.py) READS the xdist_group marker to append `@group` to the nodeid for
-    loadgroup scheduling. We must ADD the marker before xdist reads it; without
-    tryfirst the registration order can flip (it did after the subdir restructure +
-    importlib), leaving items ungrouped -> distributed -> the uc_server container
-    races `docker run --name uc-duck` across workers.
+    Workers share one container (uc.server), so none may stop it -- it must outlive them all. The
+    controller's sessionfinish runs after every worker has finished. No-op if never started (e.g. a
+    databricks-only run) or when called on a worker.
     """
-    mark = pytest.mark.xdist_group("oss_uc_server")
+    if getattr(session.config, "workerinput", None) is not None:
+        return  # worker
+    teardown_shared()
+
+
+def pytest_collection_modifyitems(items):
+    """Mark every oss_local item `oss_local` so `-m oss_local` selects the whole subtree.
+
+    No xdist_group: the uc_server container is shared first-worker-wins across workers (uc.server),
+    so OSS tests distribute normally.
+    """
     oss_local = pytest.mark.oss_local
     for item in items:
         path = getattr(item, "path", None)
@@ -57,8 +57,7 @@ def pytest_collection_modifyitems(items):
             path.relative_to(_OSS_DIR)
         except ValueError:
             continue
-        item.add_marker(mark)
-        item.add_marker(oss_local)  # so `-m oss_local` selects the whole subtree, not just matrix cells
+        item.add_marker(oss_local)
 
 
 @pytest.fixture(autouse=True)
