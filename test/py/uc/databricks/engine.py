@@ -31,8 +31,17 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from driver import Fixture, find_duckdb, step  # find_duckdb: resolve tools from one build
-from duckdb_pytest_driver.fixtures import canonicalize, load_fixture, map_columns, resolve_seed
+from driver import (
+    Fixture,
+    find_duckdb,
+    step,
+)  # find_duckdb: resolve tools from one build
+from duckdb_pytest_driver.fixtures import (
+    canonicalize,
+    load_fixture,
+    map_columns,
+    resolve_seed,
+)
 
 # The databricks_gen library (atomic SQL primitives over the SDK) lives in scripts/.
 # databricks -> uc -> py -> test -> <repo root>  (4 dirs up from this file's dir); put
@@ -156,13 +165,30 @@ def _split_source(source_fqn: str):
 # Credentials (the Databricks provider's connection creds)
 # ---------------------------------------------------------------------------
 
-_CRED_VARS = ("DATABRICKS_TOKEN", "DATABRICKS_ENDPOINT", "DATABRICKS_REGION")
-_LAST_OP_ERROR = None  # op's error from the last _op_fetch (controller) -- for the hard-fail message
+# All four are REQUIRED. WAREHOUSE_ID is only used on the write path, but we require it regardless:
+# a warehouse-less run would otherwise "validate" on the core three, then fail confusingly deep in a
+# write test on an empty ${DATABRICKS_WAREHOUSE_ID}. Requiring it fails fast + clear up front instead.
+_CRED_VARS = (
+    "DATABRICKS_TOKEN",
+    "DATABRICKS_ENDPOINT",
+    "DATABRICKS_REGION",
+    "DATABRICKS_WAREHOUSE_ID",
+)
+_LAST_OP_ERROR = (
+    None  # op's error from the last _op_fetch (controller) -- for the hard-fail message
+)
 
 
 def have_core_creds():
-    """True if the core creds (TOKEN/ENDPOINT/REGION) are in the environment."""
+    """True if the required creds (TOKEN/ENDPOINT/REGION/WAREHOUSE_ID) are in the environment."""
     return all(os.environ.get(k) for k in _CRED_VARS)
+
+
+def creds_complete(value):
+    """True if a FETCHED creds dict carries the core vars -- value-based, for the driver's
+    credential(validate=...) contract (validate(value)). Distinct from have_core_creds(), which reads
+    os.environ (the driver adopts creds into env only AFTER this validate passes)."""
+    return bool(value) and all(value.get(k) for k in _CRED_VARS)
 
 
 def cred_failure_detail():
@@ -181,7 +207,9 @@ def _require_creds():
     workers; the conftest hard-fails when they're unavailable. This is the --cli-path guard.
     """
     if not have_core_creds():
-        raise pytest.UsageError(f"Databricks credentials unavailable ({cred_failure_detail()}).")
+        raise pytest.UsageError(
+            f"Databricks credentials unavailable ({cred_failure_detail()})."
+        )
 
 
 def ensure_env(*, dry_run=False):
@@ -198,10 +226,9 @@ def ensure_env(*, dry_run=False):
         _require_creds()
 
 
-# The 1Password item holding the databricks _env bundle (TOKEN/ENDPOINT/REGION/WAREHOUSE_ID),
-# and the full var set (warehouse is write-path only, so not in the _require_creds core check).
+# The 1Password item holding the databricks _env bundle (TOKEN/ENDPOINT/REGION/WAREHOUSE_ID).
 _OP_CRED_SECRET = "op://testing-rw/databricks_ccv2/_env"
-_ENV_VARS = _CRED_VARS + ("DATABRICKS_WAREHOUSE_ID",)
+_ENV_VARS = _CRED_VARS  # the full bundle == the required set now (warehouse is required, see _CRED_VARS)
 
 
 def load_creds(config=None):
@@ -209,8 +236,9 @@ def load_creds(config=None):
     driver broadcast seam; `config` unused, matches the factory signature).
 
     Env-set vars ALWAYS win, per variable; 1Password fills only the gaps:
-      - all core (TOKEN/ENDPOINT/REGION) in env -> return env, NO `op` (the wrapper / CI path);
-      - any core missing -> fetch the bundle, then overlay whatever env DID set, so a PARTIAL
+      - all required vars (TOKEN/ENDPOINT/REGION/WAREHOUSE_ID) in env -> return env, NO `op`
+        (the wrapper / CI path);
+      - any required var missing -> fetch the bundle, then overlay whatever env DID set, so a PARTIAL
         override survives (e.g. a personal TOKEN with ENDPOINT/REGION/WAREHOUSE from 1Password).
     If `op` is unavailable the result is just the env partials -> _require_creds then skips.
     """
@@ -228,7 +256,7 @@ def _op_fetch():
     global _LAST_OP_ERROR
     cmd = f"op read {_OP_CRED_SECRET} | op inject"
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.SubprocessError) as e:
         _LAST_OP_ERROR = f"`op` could not run: {e}"
         return {}
@@ -243,7 +271,7 @@ def _op_fetch():
         if not s or s.startswith("#"):
             continue
         if s.startswith("export "):
-            s = s[len("export "):].lstrip()
+            s = s[len("export ") :].lstrip()
         key, sep, val = s.partition("=")
         if sep:
             creds[key.strip()] = val.strip().strip("\"'")
@@ -282,13 +310,17 @@ class DatabricksProvisioner:
                 "wired for databricks). Add @requires, or pick an OSS test for a bare REPL."
             )
 
-        ensure_env(dry_run=dry_run)  # UC_TEST_CATALOG default + creds check (skipped on dry_run)
+        ensure_env(
+            dry_run=dry_run
+        )  # UC_TEST_CATALOG default + creds check (skipped on dry_run)
 
         # `access` decides POLICY (namespace + lifecycle), NOT how to instantiate:
         #   rw -> an isolated per-test cell in the write catalog, dropped on teardown;
         #   ro -> the shared table the source FQN names, instantiated once per session.
         # The instantiation itself (fixture vs Databricks def) is _instantiate's job.
-        write_catalog = os.environ["UC_TEST_CATALOG"]  # ensure_env defaulted it (config.WRITE_CATALOG)
+        write_catalog = os.environ[
+            "UC_TEST_CATALOG"
+        ]  # ensure_env defaulted it (config.WRITE_CATALOG)
         bindings = Bindings(catalog=write_catalog, default_schema="main", token=token)
 
         refs = []  # unified identity refs -> bindings.env (see uc.identity / WIP-identity-design.md)
@@ -297,11 +329,15 @@ class DatabricksProvisioner:
             bare = spec.resolved_name()
 
             if spec.access == "rw":
-                cell = cell_schema_name(spec.property("commit"), spec.property("storage"), token)
+                cell = cell_schema_name(
+                    spec.property("commit"), spec.property("storage"), token
+                )
                 target = f"{write_catalog}.{cell}.{bare}"
                 if cell not in bindings.cell_schemas:
                     bindings.cell_schemas.append(cell)
-                    bindings.plan.append(f"CREATE SCHEMA IF NOT EXISTS {write_catalog}.{cell};")
+                    bindings.plan.append(
+                        f"CREATE SCHEMA IF NOT EXISTS {write_catalog}.{cell};"
+                    )
                     if not dry_run:
                         execute(f"CREATE SCHEMA IF NOT EXISTS {write_catalog}.{cell}")
                 if cell_for_default is None:
@@ -315,7 +351,9 @@ class DatabricksProvisioner:
                 cat, sch, tbl = _split_source(target)
                 bindings.catalog, bindings.default_schema = cat, sch
                 if target in self._shared_ro:
-                    bindings.plan.append(f"[ro] {target} already provisioned this session")
+                    bindings.plan.append(
+                        f"[ro] {target} already provisioned this session"
+                    )
                 else:
                     self._instantiate(spec, target, dry_run, bindings)
                     if not dry_run:
@@ -363,11 +401,19 @@ class DatabricksProvisioner:
         """
         name = spec.source.name  # fixture logical name -- pure, no I/O
         cell_desc = f"{spec.property('commit') or 'plain'}/{spec.property('storage') or 'managed'}"
-        bindings.plan.append(f"[{spec.access}] seed {target} from fixture {name!r} ({cell_desc})")
+        bindings.plan.append(
+            f"[{spec.access}] seed {target} from fixture {name!r} ({cell_desc})"
+        )
         if dry_run:
             return
-        props = dict(CATALOG_MANAGED_PROPS) if spec.property("commit") == "cmt" else None
-        location = self._s3_location(target) if spec.property("storage") == "external" else None
+        props = (
+            dict(CATALOG_MANAGED_PROPS) if spec.property("commit") == "cmt" else None
+        )
+        location = (
+            self._s3_location(target)
+            if spec.property("storage") == "external"
+            else None
+        )
         definition = load_fixture(spec.source, [_FIXTURES])
         tbl = canonicalize(self._duckdb_cli(), definition)
         cols = ", ".join(f"{n} {t}" for n, t in map_columns(tbl, DATABRICKS_TYPE_MAP))
@@ -391,9 +437,13 @@ class DatabricksProvisioner:
             external = "{location}" in f.read()
         location = self._s3_location(target) if external else None
         insert_path = os.path.join(_DATA_DIR, f"{table}.insert.sql")
-        bindings.plan.append(f"[ro] provision {target} from {os.path.basename(def_path)}")
+        bindings.plan.append(
+            f"[ro] provision {target} from {os.path.basename(def_path)}"
+        )
         if os.path.isfile(insert_path):
-            bindings.plan.append(f"    + DuckDB UC insert ({os.path.basename(insert_path)})")
+            bindings.plan.append(
+                f"    + DuckDB UC insert ({os.path.basename(insert_path)})"
+            )
         if dry_run:
             return
         with step(f"provision {target} from {os.path.basename(def_path)}"):
@@ -418,9 +468,13 @@ class DatabricksProvisioner:
         duckdb_bin = find_duckdb(self._config, wd)
         with open(path) as f:
             sql = os.path.expandvars(f.read())
-        proc = subprocess.run([duckdb_bin, "-unsigned", "-c", sql], capture_output=True, text=True)
+        proc = subprocess.run(
+            [duckdb_bin, "-unsigned", "-c", sql], capture_output=True, text=True
+        )
         if proc.returncode != 0:
-            raise RuntimeError(f"DuckDB UC insert failed ({os.path.basename(path)}):\n{proc.stderr.strip()}")
+            raise RuntimeError(
+                f"DuckDB UC insert failed ({os.path.basename(path)}):\n{proc.stderr.strip()}"
+            )
 
     def teardown(self, token, bindings=None) -> None:
         """DROP each cell schema CASCADE (databricks_gen.drop_schema)."""
@@ -444,7 +498,9 @@ class DatabricksProvisioner:
         """
         if redact:
             # dry-run print: must not require a built binary.
-            build_dir = os.environ.get("BUILD_DIR", os.path.join(_REPO_ROOT, "build", "release"))
+            build_dir = os.environ.get(
+                "BUILD_DIR", os.path.join(_REPO_ROOT, "build", "release")
+            )
         else:
             wd = getattr(self._config, "sqllogic_working_dir", None) or os.getcwd()
             build_dir = os.path.dirname(find_duckdb(self._config, wd))

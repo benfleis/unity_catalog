@@ -1,20 +1,17 @@
-"""OSS Unity Catalog server -- our first require/resource declaration.
+"""OSS Unity Catalog server -- the shared docker service backing oss_local tests.
 
-A running OSS UC "ducklabs" docker server, declared per the driver framework's resource
-model (test/py/driver/README.md, "Resources & disposition"): a flat triple of
-acquire-mode x create-disposition x destroy-disposition, *executed* by a pytest fixture.
-Fixture scopes are the provision/share/release engine -- we don't hand-roll a manager.
+A running OSS UC "ducklabs" docker container, provisioned per invocation and shared across xdist
+workers via the driver STORE (first-need-wins single-flight -- see driver `provision_service` /
+`copy_or_provision`), then stopped once by the controller at session end (driver `_stop_services`).
 
-Chosen policy: always-fresh per session.
-  acquire-mode = shared         (tests share one server; they dirty tables, not the service)
-  create       = ALWAYS_CREATE  (force a fresh container at session start)
-  destroy      = ALWAYS_DESTROY (stop it at session end)
-Isolation is by-lifecycle (recreate fresh, fixed name/port) -- cheap for local UC.
+Policy: always-fresh per invocation.
+  create  = ALWAYS_CREATE   (start_container does `docker rm -f` first -> fresh container)
+  destroy = ALWAYS_DESTROY  (the controller stops it at session end)
 
-NOTE (xdist): ONE shared container per invocation across all workers. It's a host singleton
-(fixed name/port), booted first-worker-wins under a filesystem lock and torn down once by the
-controller (oss_local/conftest.py pytest_sessionfinish) so it outlives every worker using it.
-No xdist_group / single-worker pinning needed -- OSS tests distribute normally.
+Isolation is by-lifecycle at a FIXED name/port (a host singleton), so exactly ONE OSS invocation may
+run at a time -- concurrent invocations would collide on the container/port (documented limitation).
+The `uc_server` fixture reconstructs the store's block into a UcServer; `--repl` (OssProvisioner) owns
+its own container via `start_container` directly, outside the store.
 """
 
 import json
@@ -29,26 +26,9 @@ from dataclasses import dataclass
 
 import pytest
 
-from driver import step
+from driver import provision_service, service, step
 from uc import SCRIPTS_DIR
 
-
-@dataclass(frozen=True)
-class ResourceSpec:
-    """Flat resource declaration (see driver README). The fixture executes it."""
-
-    identity: str
-    acquire_mode: str  # "shared" | "exclusive"
-    create: str  # "NEVER_CREATE" | "MAY_CREATE" | "ALWAYS_CREATE"
-    destroy: str  # "NEVER_DESTROY" | "MAY_DESTROY" | "ALWAYS_DESTROY"
-
-
-OSS_UC_SERVER = ResourceSpec(
-    identity="oss-uc-server",
-    acquire_mode="shared",
-    create="ALWAYS_CREATE",
-    destroy="ALWAYS_DESTROY",
-)
 
 # Fixed name/port (by-lifecycle isolation). A host client resolves the server's absolute
 # file:// table paths only if the bind-mount path matches, which the kit `run` script
@@ -149,153 +129,50 @@ def stop_container(data_dir=None):
             shutil.rmtree(data_dir, ignore_errors=True)
 
 
-# --- shared-container coordination (first-worker-wins across xdist workers) ----------------
-#
-# The container is a host singleton (fixed name/port) started ONCE per invocation and shared by
-# all workers: the first worker to need it wins a filesystem lock and boots it; the rest block on
-# the lock, then reuse. Teardown is the controller's job (see conftest pytest_sessionfinish) so the
-# container outlives every worker. State/lock live at fixed host paths keyed by the container name
-# (its host-singleton nature); the invocation id (driver run-id) tags state so a stale container
-# from a prior run is replaced (ALWAYS_CREATE), not reused.
-_STATE_PATH = os.path.join(tempfile.gettempdir(), f"{CONTAINER}.state.json")
-_LOCK_PATH = os.path.join(tempfile.gettempdir(), f"{CONTAINER}.start.lock")
-# Steal a lock held longer than one full boot+wait (a holder that crashed mid-boot). Tracks
-# _READY_TIMEOUT_S so shortening the wait shortens the worst-case steal delay too. reclaim_stale()
-# already deletes a leaked lock at controller session start, so peers almost never hit this timed
-# steal -- it's the fallback for an intra-run crash.
-_LOCK_STALE_S = _READY_TIMEOUT_S + 60
+# --- store-backed shared container (first-need-wins via the driver store) ------------------
+# The driver store's per-key provision lock gives first-worker-wins (replacing the old filesystem
+# _StartLock + state file); the manager dies with the controller, so no lock file leaks, and
+# ALWAYS_CREATE (docker rm -f in start_container) force-removes a container leaked by an interrupted
+# run -- so reclaim_stale is obsolete. The controller stops the container once at sessionfinish
+# (driver _stop_services), before the store manager shuts down.
 
 
-class _StartLock:
-    """Minimal cross-process mutex (no filelock dep): O_EXCL create = held, unlink = released.
-    Steals a lock file older than _LOCK_STALE_S (a holder that crashed mid-boot)."""
+def _start_service(config):
+    """Service `start`: boot a fresh container; return a JSON block (the UcServer fields).
+    Runs once per invocation under the store's per-key lock (driver copy_or_provision)."""
+    srv = start_container()
+    return {"endpoint": srv.endpoint, "container": srv.container, "data_dir": srv.data_dir}
 
-    def __enter__(self):
-        while True:
-            try:
-                fd = os.open(_LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(fd, str(os.getpid()).encode())
-                os.close(fd)
-                return self
-            except FileExistsError:
-                try:
-                    if time.time() - os.path.getmtime(_LOCK_PATH) > _LOCK_STALE_S:
-                        os.unlink(_LOCK_PATH)  # crashed holder -> steal
-                        continue
-                except OSError:
-                    pass
-                time.sleep(0.2)
 
-    def __exit__(self, *exc):
+def _stop_service(config):
+    """Service `stop`: stop the container + clean its data dir (data_dir from the store block).
+    Runs once on the controller at sessionfinish (driver _stop_services); the store is still up."""
+    from duckdb_pytest_driver import store as _store
+    from driver import get_store
+
+    data_dir = None
+    handle = get_store(config)
+    if handle is not None:
         try:
-            os.unlink(_LOCK_PATH)
-        except OSError:
+            data_dir = _store.copy(handle, "oss-uc-server").get("data_dir")
+        except Exception:
             pass
-        return False
+    stop_container(data_dir)
 
 
-def _invocation_id(config):
-    """This invocation's shared id (the driver run-id): identical on controller + all workers."""
-    wi = getattr(config, "workerinput", None)
-    if wi and "sqllogic_run_id" in wi:
-        return wi["sqllogic_run_id"]
-    return getattr(config, "_sqllogic_run_id", None) or "single"
-
-
-def _container_running():
-    r = _docker("inspect", "-f", "{{.State.Running}}", CONTAINER, check=False)
-    return r.returncode == 0 and r.stdout.strip() == "true"
-
-
-def _read_state():
-    try:
-        with open(_STATE_PATH) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return None
-
-
-def _ensure_shared_container(invocation_id):
-    """Return the ONE shared UcServer for this invocation, booting it (under the lock) iff no live
-    container for this invocation exists yet. First-worker-wins: losers block on the lock, then
-    reuse the winner's container."""
-    with _StartLock():
-        info = _read_state()
-        if info and info.get("invocation") == invocation_id and _container_running():
-            return UcServer(endpoint=info["endpoint"], container=info["container"], data_dir=info["data_dir"])
-        srv = start_container()  # ALWAYS_CREATE: docker rm -f first -> fresh + ready before we publish
-        with open(_STATE_PATH, "w") as f:
-            json.dump(
-                {"invocation": invocation_id, "endpoint": srv.endpoint,
-                 "container": srv.container, "data_dir": srv.data_dir},
-                f,
-            )
-        return srv
-
-
-def reclaim_stale(invocation_id):
-    """Controller-only, BEFORE workers race the start-lock: remove a container / state / lock file
-    leaked by a prior *interrupted* run, so this run's first fresh boot never races a dying container
-    (whose not-yet-released port stalls docker-run's rebind) or blocks on a stale lock file.
-
-    Idempotent + safe when nothing leaked. A leak is a state file tagged with a *different*
-    invocation, or a running container with no state at all. A state file tagged with THIS invocation
-    is left untouched -- this run hasn't booted yet, so there is nothing of ours to race.
-    """
-    info = _read_state()
-    leaked = (info is not None and info.get("invocation") != invocation_id) or (
-        info is None and _container_running()
-    )
-    if not leaked:
-        return
-    with step("reclaiming leaked OSS UC container from an interrupted run"):
-        _docker("rm", "-f", CONTAINER, check=False)  # running or stopped -> gone; frees the port early
-    if info and info.get("data_dir"):
-        shutil.rmtree(info["data_dir"], ignore_errors=True)
-    for p in (_STATE_PATH, _LOCK_PATH):
-        try:
-            os.unlink(p)
-        except OSError:
-            pass
-
-
-_torn_down = False
-
-
-def teardown_shared():
-    """Stop + clean the shared container at NORMAL session end (controller pytest_sessionfinish).
-    Interrupted/killed runs don't reach here (xdist owns SIGINT); those leaks are recovered by
-    reclaim_stale() at the next session start. Idempotent (safe if ever called twice); drops the
-    start-lock + state so a completed run leaves nothing behind."""
-    global _torn_down
-    if _torn_down:
-        return
-    _torn_down = True
-    info = _read_state()
-    if not info:
-        return
-    stop_container(info.get("data_dir"))
-    for p in (_STATE_PATH, _LOCK_PATH):
-        try:
-            os.unlink(p)
-        except OSError:
-            pass
+OSS_SERVICE = service("oss-uc-server", start=_start_service, stop=_stop_service, fixture="uc_server")
 
 
 @pytest.fixture(scope="session")
 def uc_server(request):
-    """Acquire the ONE shared OSS UC server for this invocation (first-worker-wins).
+    """The ONE shared OSS UC server for this invocation (first-need-wins via the store).
 
-    Per OSS_UC_SERVER: ALWAYS_CREATE (fresh per invocation) / ALWAYS_DESTROY (the controller tears
-    it down at session end). Shared across xdist workers via a filesystem lock, so OSS tests
-    distribute normally -- no xdist_group.
+    ALWAYS_CREATE (fresh per invocation) / ALWAYS_DESTROY (the controller stops it at session end).
+    The driver store single-flights the boot across xdist workers; we reconstruct the block into a
+    UcServer. No filesystem lock, no xdist_group.
     """
-    spec = OSS_UC_SERVER
-    assert (
-        spec.create == "ALWAYS_CREATE" and spec.destroy == "ALWAYS_DESTROY"
-    ), f"only ALWAYS_CREATE/ALWAYS_DESTROY is wired today; got {spec}"
-
-    srv = _ensure_shared_container(_invocation_id(request.config))
+    block = provision_service(request.config, OSS_SERVICE)
+    srv = UcServer(endpoint=block["endpoint"], container=block["container"], data_dir=block["data_dir"])
     global _ACTIVE_SERVER
     _ACTIVE_SERVER = srv  # publish for OssProvisioner (run path reuses this container)
     try:
@@ -303,4 +180,4 @@ def uc_server(request):
     finally:
         _ACTIVE_SERVER = None
         # No stop here: the container is shared across workers; the controller stops it once at
-        # pytest_sessionfinish (oss_local/conftest.py).
+        # sessionfinish (driver _stop_services).
