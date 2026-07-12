@@ -19,6 +19,8 @@ safe where the SDK isn't installed (e.g. offline test collection).
 import os
 import time
 
+from ducktest.sqldef import build_insert, split_statements, sql_literal  # noqa: F401
+
 _HOST_ENV = "DATABRICKS_ENDPOINT"
 _TOKEN_ENV = "DATABRICKS_TOKEN"
 _WAREHOUSE_ENV = "DATABRICKS_WAREHOUSE_ID"
@@ -97,19 +99,10 @@ def execute(sql, *, catalog=None, schema=None):
     return [tuple(r) for r in (rows or [])]
 
 
-def sql_literal(v):
-    """Render a Python scalar as a Databricks SQL literal (for INSERT ... VALUES)."""
-    if v is None:
-        return "NULL"
-    if isinstance(v, bool):
-        return "TRUE" if v else "FALSE"
-    if isinstance(v, (int, float)):
-        return repr(v)
-    return "'" + str(v).replace("'", "''") + "'"
-
-
 # --------------------------------------------------------------------------- #
 # Pure statement builders (no I/O) — the dry-run plan uses these.
+# `sql_literal` / `split_statements` / `build_insert` come from ducktest.sqldef
+# (generic, engine-agnostic); only the Databricks-specific builders live here.
 # --------------------------------------------------------------------------- #
 
 
@@ -137,15 +130,6 @@ def build_create_table(
     if as_select:
         sql += f"\n  AS {as_select}"
     return sql
-
-
-def build_insert(fqn, rows, *, columns=None):
-    """Build an INSERT INTO ... VALUES statement from `rows` (list of python-scalar tuples)."""
-    cols = f" ({columns})" if columns else ""
-    values = ", ".join(
-        "(" + ", ".join(sql_literal(v) for v in row) + ")" for row in rows
-    )
-    return f"INSERT INTO {fqn}{cols} VALUES {values}"
 
 
 # --------------------------------------------------------------------------- #
@@ -190,40 +174,6 @@ def select(sql):
 # Multi-statement SQL files (Databricks Delta artifact defs) — the `from-sql` core,
 # reusable by the CLI and the provisioner.
 # --------------------------------------------------------------------------- #
-
-
-def split_statements(sql):
-    """Split multi-statement SQL on TOP-LEVEL `;` only.
-
-    A `;` inside a 'single-quoted' string is not a boundary (`''` is an escaped quote).
-    Line comments are stripped by `run_sql_file`. The SQL API has no multi-statement call,
-    so this client-side split is unavoidable; being quote-aware is what keeps it honest.
-    """
-    out, buf, in_str = [], [], False
-    i, n = 0, len(sql)
-    while i < n:
-        c = sql[i]
-        if c == "'":
-            buf.append(c)
-            if (
-                in_str and i + 1 < n and sql[i + 1] == "'"
-            ):  # '' -> escaped quote, stay in string
-                buf.append("'")
-                i += 2
-                continue
-            in_str = not in_str
-        elif c == ";" and not in_str:
-            stmt = "".join(buf).strip()
-            if stmt:
-                out.append(stmt)
-            buf = []
-        else:
-            buf.append(c)
-        i += 1
-    stmt = "".join(buf).strip()
-    if stmt:
-        out.append(stmt)
-    return out
 
 
 def run_sql_file(path, *, table, location=None, dry_run=False):

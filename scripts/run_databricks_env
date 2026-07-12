@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 
-# NOTE: _env below gets the 3 vars above directly
 eval $(op read op://testing-rw/databricks_ccv2/_env | op inject)
 
 # Create Databricks config
@@ -10,9 +9,7 @@ host = $DATABRICKS_ENDPOINT
 token = $DATABRICKS_TOKEN
 EOF
 
-schema_rand="$(uuidgen | tr '[:upper:]' '[:lower:]' | tr '-' '_' | cut -b1-6)"
 export UC_TEST_CATALOG=duckdb_write_testing
-export UC_TEST_SCHEMA="test_schema_$schema_rand"
 
 # The SQL warehouse that databricks_gen (SDK Statement Execution) runs table-management
 # SQL on. Its value comes from the 1Password _env above; re-export so the child inherits

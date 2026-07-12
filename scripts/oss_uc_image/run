@@ -9,12 +9,12 @@
 #          HOST client too). Defaults to a fresh temp dir (printed below).
 #
 # Env overrides: UC_DUCK_CONTAINER (default uc-duck), UC_DUCK_PORT (default 8080),
-#                FINAL_IMAGE (default duckdb/unitycatalog:local, the alias build tags).
+#                FINAL_IMAGE (default ghcr.io/benfleis/unitycatalog-ducklabs:local, the alias build_image tags).
 set -euo pipefail
 
 CONTAINER="${UC_DUCK_CONTAINER:-uc-duck}"
 PORT="${UC_DUCK_PORT:-8080}"
-IMAGE="${FINAL_IMAGE:-duckdb/unitycatalog:local}"
+IMAGE="${FINAL_IMAGE:-ghcr.io/benfleis/unitycatalog-ducklabs:local}"
 HOSTDIR="${1:-$(mktemp -d -t uc-duck-data-XXXXXX)}"
 
 # Absolute path required for bind mounts.
