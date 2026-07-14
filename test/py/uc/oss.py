@@ -206,7 +206,7 @@ class OssProvisioner:
             )  # shared -> created once, lives for session
         return name
 
-    def make_init(self, b: OssBindings, *, redact: bool = False) -> str:
+    def make_init_sql(self, b: OssBindings, *, redact: bool = False) -> str:
         """duckdb init SQL for `duckdb -unsigned -init` (the --repl playground).
 
         LOAD local extensions, CREATE SECRET (the OSS token is the literal 'not-used',
@@ -252,7 +252,7 @@ USE duck;
 .print ''
 """
 
-    def teardown(self, token, bindings=None) -> None:
+    def teardown(self, bindings=None) -> None:
         """Drop per-test tables; stop the container only if THIS provision owned it (--repl)."""
         for schema, table in getattr(bindings, "seeded", None) or []:
             uctl("drop", schema, table, check=False)

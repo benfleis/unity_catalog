@@ -27,7 +27,7 @@ ASSUMPTIONS (cannot be verified here — no Databricks; see REPORT):
 import os
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import pytest
 
@@ -42,6 +42,8 @@ from ducktest.fixtures import (
     map_columns,
     resolve_seed,
 )
+from ducktest.provision import Bindings
+from ducktest.provision import Provisioner as _BaseProvisioner
 
 # The databricks_gen library (atomic SQL primitives over the SDK) lives in scripts/.
 # databricks -> uc -> py -> test -> <repo root>  (4 dirs up from this file's dir); put
@@ -85,30 +87,6 @@ class TableBinding:
     requirement_name: str  # bare name a body uses
     fqn: str  # fully-qualified physical table the name resolves to
     access: str  # ro | rw
-
-
-@dataclass
-class Bindings:
-    """Result of provision(): everything --cli / a run path needs.
-
-    catalog       : the Databricks catalog (for ATTACH).
-    default_schema: the cell schema to ATTACH with as DEFAULT_SCHEMA (mono-cell).
-                    For an rw spec this is its cell; for an all-ro plan it falls
-                    back to the source schema of the first spec.
-    tables        : per-requirement TableBinding (bodies reference these bare).
-    cell_schemas  : the set of cell schemas created (for teardown / display).
-    env           : env mapping a future run path would inject into the body.
-    plan          : human-readable provision commands (the dry-run "plan").
-    token         : the provision token (cell-schema suffix).
-    """
-
-    catalog: str
-    default_schema: str
-    token: str
-    tables: list = field(default_factory=list)
-    cell_schemas: list = field(default_factory=list)
-    env: dict = field(default_factory=dict)
-    plan: list = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -283,24 +261,31 @@ def _op_fetch():
 # ---------------------------------------------------------------------------
 
 
-class DatabricksProvisioner:
-    """Concrete Provisioner (driver/provision.py) for Databricks Unity Catalog."""
+class DatabricksProvisioner(_BaseProvisioner):
+    """Concrete Provisioner (ducktest.provision.Provisioner) for Databricks Unity Catalog.
+
+    The generic access-policy spec-loop + RO once-guard + teardown now live in the base
+    (`ducktest.provision.Provisioner`); this class supplies the Databricks-specific hooks
+    only. `access` decides POLICY (namespace + lifecycle), NOT how to instantiate:
+      rw -> an isolated per-test cell in the write catalog, dropped on teardown;
+      ro -> the shared table the source FQN names, instantiated once per session.
+    The instantiation itself (fixture vs Databricks def) is `instantiate`'s job.
+    """
 
     def __init__(self, config=None):
-        # config lets make_init resolve the duckdb build dir from the SAME build the
+        super().__init__()
+        # config lets make_init_sql resolve the duckdb build dir from the SAME build the
         # driver runs the unittest binary from (--build / $BUILD_DIR / --duckdb-bin),
         # instead of a hardcoded build/release. See uc.oss.OssProvisioner.
         self._config = config
-        # RO variant tables are provisioned from their def ONCE per session (per worker under
-        # xdist); this guards re-provisioning. Mirrors uc.oss.OssProvisioner._shared_ro.
-        self._shared_ro = set()
+        # Per-provision()-call bookkeeping for the unified identity env (see uc.identity /
+        # WIP-identity-design.md) and the mono-cell default-schema reconciliation — reset
+        # in before_provision(), accumulated in rw_target/ro_target, applied in
+        # finalize_bindings/env_for. The base doesn't track this; it's backend-shaped.
+        self._refs = []
+        self._cell_for_default = None
 
-    def provision(self, specs, token, *, dry_run=False, params=None) -> Bindings:
-        """Provision fixtures for `specs` under `token`. See module docstring.
-
-        dry_run=True resolves + prints the plan and builds the Bindings (schema
-        names, env, would-be commands/DDL) but executes NO DDL.
-        """
+    def before_provision(self, specs, token, dry_run):
         if not specs:
             # The framework allows --repl on a test with no @requires (bare REPL). The
             # databricks backend has no minimal-REPL path wired yet (it needs a cell to
@@ -309,80 +294,61 @@ class DatabricksProvisioner:
                 "--repl on a databricks test needs @requires (no minimal-REPL path "
                 "wired for databricks). Add @requires, or pick an OSS test for a bare REPL."
             )
-
         ensure_env(
             dry_run=dry_run
         )  # UC_TEST_CATALOG default + creds check (skipped on dry_run)
+        self._refs = []
+        self._cell_for_default = None
 
-        # `access` decides POLICY (namespace + lifecycle), NOT how to instantiate:
-        #   rw -> an isolated per-test cell in the write catalog, dropped on teardown;
-        #   ro -> the shared table the source FQN names, instantiated once per session.
-        # The instantiation itself (fixture vs Databricks def) is _instantiate's job.
+    def new_bindings(self, token, *, params=None) -> Bindings:
         write_catalog = os.environ[
             "UC_TEST_CATALOG"
-        ]  # ensure_env defaulted it (config.WRITE_CATALOG)
-        bindings = Bindings(catalog=write_catalog, default_schema="main", token=token)
+        ]  # before_provision's ensure_env defaulted it (config.WRITE_CATALOG)
+        return Bindings(catalog=write_catalog, default_schema="main", token=token)
 
-        refs = []  # unified identity refs -> bindings.env (see uc.identity / WIP-identity-design.md)
-        cell_for_default = None
-        for spec in specs:
-            bare = spec.resolved_name()
+    def rw_target(self, spec, token, bindings, dry_run):
+        bare = spec.resolved_name()
+        cell = cell_schema_name(
+            spec.property("commit"), spec.property("storage"), token
+        )
+        target = f"{bindings.catalog}.{cell}.{bare}"
+        self.ensure_isolated(f"{bindings.catalog}.{cell}", bindings, dry_run)
+        if self._cell_for_default is None:
+            self._cell_for_default = cell
+        bindings.tables.append(TableBinding(bare, target, "rw"))
+        self._refs.append(TableRef(bare, bindings.catalog, cell, bare, "rw"))
+        return target
 
-            if spec.access == "rw":
-                cell = cell_schema_name(
-                    spec.property("commit"), spec.property("storage"), token
-                )
-                target = f"{write_catalog}.{cell}.{bare}"
-                if cell not in bindings.cell_schemas:
-                    bindings.cell_schemas.append(cell)
-                    bindings.plan.append(
-                        f"CREATE SCHEMA IF NOT EXISTS {write_catalog}.{cell};"
-                    )
-                    if not dry_run:
-                        execute(f"CREATE SCHEMA IF NOT EXISTS {write_catalog}.{cell}")
-                if cell_for_default is None:
-                    cell_for_default = cell
-                self._instantiate(spec, target, dry_run, bindings)
-                bindings.tables.append(TableBinding(bare, target, "rw"))
-                refs.append(TableRef(bare, write_catalog, cell, bare, "rw"))
-            else:
-                # ro sources are FQN strings naming a shared, premade/def table.
-                target = _expand(spec.source)
-                cat, sch, tbl = _split_source(target)
-                bindings.catalog, bindings.default_schema = cat, sch
-                if target in self._shared_ro:
-                    bindings.plan.append(
-                        f"[ro] {target} already provisioned this session"
-                    )
-                else:
-                    self._instantiate(spec, target, dry_run, bindings)
-                    if not dry_run:
-                        self._shared_ro.add(target)
-                bindings.tables.append(TableBinding(bare, target, "ro"))
-                refs.append(TableRef(bare, cat, sch, tbl, "ro"))
+    def ro_target(self, spec, bindings):
+        # ro sources are FQN strings naming a shared, premade/def table.
+        target = _expand(spec.source)
+        cat, sch, tbl = _split_source(target)
+        bindings.catalog, bindings.default_schema = cat, sch
+        bindings.tables.append(TableBinding(spec.resolved_name(), target, "ro"))
+        self._refs.append(TableRef(spec.resolved_name(), cat, sch, tbl, "ro"))
+        return target
 
+    def finalize_bindings(self, bindings):
         # Mono-cell default schema: the (first) rw cell if any, else the ro source schema.
-        if cell_for_default is not None:
-            bindings.default_schema = cell_for_default
+        if self._cell_for_default is not None:
+            bindings.default_schema = self._cell_for_default
 
+    def env_for(self, bindings) -> dict:
         # Primary (bare CATALOG/SCHEMA/TABLE) = the first rw cell, else the first ref.
-        primary = next((r for r in refs if r.access == "rw"), refs[0] if refs else None)
+        # Env a run path injects (body reads these; see the .test): the unified identity
+        # contract (CATALOG/SCHEMA/TABLE + per-key {KEY}/{KEY_*} aliases). All DB bodies
+        # are ported off the legacy UC_TEST_* keys.
+        primary = next(
+            (r for r in self._refs if r.access == "rw"),
+            self._refs[0] if self._refs else None,
+        )
+        return build_env(self._refs, primary=primary)
 
-        # Env a run path injects (body reads these; see the .test): the unified identity contract
-        # (CATALOG/SCHEMA/TABLE + per-key {KEY}/{KEY_*} aliases). All DB bodies are ported off the
-        # legacy UC_TEST_* keys.
-        bindings.env = build_env(refs, primary=primary)
+    def dry_run_summary(self, bindings):
+        print(f"cell schema(s): {bindings.isolated or '(none — all ro)'}")
+        print(f"DEFAULT_SCHEMA: {bindings.default_schema}")
 
-        if dry_run:
-            print("provision plan (NO DDL executed):")
-            for line in bindings.plan:
-                print(f"  {line}")
-            print(f"cell schema(s): {bindings.cell_schemas or '(none — all ro)'}")
-            print(f"DEFAULT_SCHEMA: {bindings.default_schema}")
-
-        return bindings
-
-    def _instantiate(self, spec, target, dry_run, bindings):
+    def instantiate(self, spec, target, dry_run, bindings):
         """Instantiate `target` from `spec`'s definition. Dispatches on definition TYPE (the
         instantiation method) -- independent of `access`, which set target + lifecycle above.
         """
@@ -476,18 +442,26 @@ class DatabricksProvisioner:
                 f"DuckDB UC insert failed ({os.path.basename(path)}):\n{proc.stderr.strip()}"
             )
 
-    def teardown(self, token, bindings=None) -> None:
-        """DROP each cell schema CASCADE (databricks_gen.drop_schema)."""
-        cell_schemas = list(bindings.cell_schemas) if bindings else []
-        if not cell_schemas:
-            print(f"teardown: nothing to drop for token={token}")
-            return
-        catalog = bindings.catalog if bindings else os.environ.get("UC_TEST_CATALOG")
-        for cell in cell_schemas:
-            with step(f"drop cell schema {catalog}.{cell} CASCADE"):
-                drop_schema(f"{catalog}.{cell}", cascade=True)
+    def execute(self, sql):
+        """Route through databricks_gen's execute (the SDK transport) — used by the base
+        teardown() default; this backend overrides teardown() below for step() narration,
+        so execute() is only reached if something calls it directly."""
+        execute(sql)
 
-    def make_init(self, bindings: Bindings, *, redact: bool = False) -> str:
+    def teardown(self, bindings=None) -> None:
+        """DROP each cell schema CASCADE (databricks_gen.drop_schema). `bindings.isolated`
+        holds full namespaces (catalog.cell — see ensure_isolated in rw_target)."""
+        namespaces = list(bindings.isolated) if bindings else []
+        if not namespaces:
+            print(
+                f"teardown: nothing to drop for token={bindings.token if bindings else '?'}"
+            )
+            return
+        for ns in namespaces:
+            with step(f"drop cell schema {ns} CASCADE"):
+                drop_schema(ns, cascade=True)
+
+    def make_init_sql(self, bindings: Bindings, *, redact: bool = False) -> str:
         """duckdb init SQL for `duckdb -unsigned -init`.
 
         Mirrors write_catalog_managed.test: LOAD local extensions, CREATE SECRET,
@@ -523,7 +497,7 @@ class DatabricksProvisioner:
             for t in bindings.tables
         )
 
-        return f"""-- Auto-generated by uc.databricks.engine.make_init for `duckdb -unsigned -init`.
+        return f"""-- Auto-generated by uc.databricks.engine.make_init_sql for `duckdb -unsigned -init`.
 -- -unsigned (launch flag) is required to LOAD locally-built extensions.
 LOAD '{ext("parquet")}';
 LOAD '{ext("httpfs")}';
