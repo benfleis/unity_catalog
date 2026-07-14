@@ -15,11 +15,14 @@ UC_TEST_CATALOG/SCHEMA/TABLE into resources.env. Server-only resource (uc_server
 from oss_local/conftest.py); the `oss_local` mark tags the cells for `-m oss_local`.
 """
 
-from driver import Fixture, requires_matrix, run_paired
+from ducktest import Fixture, requires_matrix, run_paired
 
 
-@requires_matrix(source=Fixture("id_name").Seed(None), access="rw",
-                 properties={"storage": ["managed", "external"]},
-                 marks=["oss_local"])
+@requires_matrix(
+    source=Fixture("id_name").Seed(None),
+    access="rw",
+    properties={"storage": ["managed", "external"]},
+    marks=["oss_local"],
+)
 def test_rw(request, uc_server, resources):
     run_paired(request, env=resources.env)

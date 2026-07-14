@@ -26,7 +26,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from driver import provision_service, service, step
+from ducktest import provision_service, service, step
 from uc import SCRIPTS_DIR
 
 
@@ -56,7 +56,9 @@ class UcServer:
 
 
 def _docker(*args, check=True):
-    return subprocess.run(["docker", *args], capture_output=True, text=True, check=check)
+    return subprocess.run(
+        ["docker", *args], capture_output=True, text=True, check=check
+    )
 
 
 def _wait_ready(timeout_s):
@@ -75,8 +77,13 @@ def _wait_ready(timeout_s):
             missing = [s for s in _SEED_SCHEMAS if s not in names]
             if not missing:
                 return
-            last = f"catalog up; schemas present={sorted(names)}, still missing={missing}"
-        except (urllib.error.URLError, OSError) as e:  # 404 (catalog not yet) / refused while booting
+            last = (
+                f"catalog up; schemas present={sorted(names)}, still missing={missing}"
+            )
+        except (
+            urllib.error.URLError,
+            OSError,
+        ) as e:  # 404 (catalog not yet) / refused while booting
             last = repr(e)
         time.sleep(1)
     raise RuntimeError(
@@ -100,12 +107,21 @@ def start_container():
         "UC_DUCK_PORT": str(PORT),
     }
     with step(f"starting OSS UC docker image ({IMAGE})"):
-        _docker("rm", "-f", CONTAINER, check=False)  # ALWAYS_CREATE: force a fresh container
+        _docker(
+            "rm", "-f", CONTAINER, check=False
+        )  # ALWAYS_CREATE: force a fresh container
         # `run` = the kit's single source of truth for the docker-run line (identical-path mount).
         # Suppress its stdout info-block so step() is the sole provisioning trace (the
         # --steps / --repl narration channel); stderr stays for failures.
-        subprocess.run([str(SCRIPTS_DIR / "run"), data_dir], env=env, check=True, stdout=subprocess.DEVNULL)
-        _wait_ready(_READY_TIMEOUT_S)  # waits until the seeded duck.cmt/plain schemas exist
+        subprocess.run(
+            [str(SCRIPTS_DIR / "run"), data_dir],
+            env=env,
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+        _wait_ready(
+            _READY_TIMEOUT_S
+        )  # waits until the seeded duck.cmt/plain schemas exist
     return UcServer(endpoint=ENDPOINT, container=CONTAINER, data_dir=data_dir)
 
 
@@ -141,14 +157,18 @@ def _start_service(config):
     """Service `start`: boot a fresh container; return a JSON block (the UcServer fields).
     Runs once per invocation under the store's per-key lock (driver copy_or_provision)."""
     srv = start_container()
-    return {"endpoint": srv.endpoint, "container": srv.container, "data_dir": srv.data_dir}
+    return {
+        "endpoint": srv.endpoint,
+        "container": srv.container,
+        "data_dir": srv.data_dir,
+    }
 
 
 def _stop_service(config):
     """Service `stop`: stop the container + clean its data dir (data_dir from the store block).
     Runs once on the controller at sessionfinish (driver _stop_services); the store is still up."""
-    from duckdb_pytest_driver import store as _store
-    from driver import get_store
+    from ducktest import store as _store
+    from ducktest import get_store
 
     data_dir = None
     handle = get_store(config)
@@ -160,7 +180,9 @@ def _stop_service(config):
     stop_container(data_dir)
 
 
-OSS_SERVICE = service("oss-uc-server", start=_start_service, stop=_stop_service, fixture="uc_server")
+OSS_SERVICE = service(
+    "oss-uc-server", start=_start_service, stop=_stop_service, fixture="uc_server"
+)
 
 
 @pytest.fixture(scope="session")
@@ -172,7 +194,11 @@ def uc_server(request):
     UcServer. No filesystem lock, no xdist_group.
     """
     block = provision_service(request.config, OSS_SERVICE)
-    srv = UcServer(endpoint=block["endpoint"], container=block["container"], data_dir=block["data_dir"])
+    srv = UcServer(
+        endpoint=block["endpoint"],
+        container=block["container"],
+        data_dir=block["data_dir"],
+    )
     global _ACTIVE_SERVER
     _ACTIVE_SERVER = srv  # publish for OssProvisioner (run path reuses this container)
     try:

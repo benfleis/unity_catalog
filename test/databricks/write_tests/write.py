@@ -5,9 +5,13 @@ provisioner create+inserts the fixture, injects CATALOG/SCHEMA, drops the cell o
 teardown). The body round-trips an INSERT against it.
 """
 
-from driver import Fixture, requires, run_paired
+from ducktest import Fixture, requires, run_paired
 
 
-@requires(source=Fixture("id_name"), access="rw", properties={"commit": "plain", "storage": "external"})
+@requires(
+    source=Fixture("id_name"),
+    access="rw",
+    properties={"commit": "plain", "storage": "external"},
+)
 def test_write(request, resources):
     run_paired(request, env=resources.env)

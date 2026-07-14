@@ -6,9 +6,13 @@ writes+reads a row through it. Depends on uc_server (session container) AND reso
 (the per-test table, dropped on teardown).
 """
 
-from driver import Fixture, requires, run_paired
+from ducktest import Fixture, requires, run_paired
 
 
-@requires(source=Fixture("id_name").Seed(None), access="rw", properties={"commit": "cmt", "storage": "managed"})
+@requires(
+    source=Fixture("id_name").Seed(None),
+    access="rw",
+    properties={"commit": "cmt", "storage": "managed"},
+)
 def test_attach(request, uc_server, resources):
     run_paired(request, env=resources.env)

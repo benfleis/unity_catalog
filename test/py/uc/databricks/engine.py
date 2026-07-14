@@ -31,12 +31,12 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from driver import (
+from ducktest import (
     Fixture,
     find_duckdb,
     step,
 )  # find_duckdb: resolve tools from one build
-from duckdb_pytest_driver.fixtures import (
+from ducktest.fixtures import (
     canonicalize,
     load_fixture,
     map_columns,

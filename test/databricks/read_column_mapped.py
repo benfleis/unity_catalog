@@ -6,7 +6,7 @@ column mapping) and id_name__alter_plain (plain ADD COLUMN) through env. The rea
 config.READ_CATALOG (env: DATABRICKS_READ_CATALOG).
 """
 
-from driver import requires, run_paired
+from ducktest import requires, run_paired
 
 from uc.databricks import config
 

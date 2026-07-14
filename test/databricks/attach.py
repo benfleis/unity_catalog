@@ -6,9 +6,13 @@ in the secret TYPE spelling). @requires(access="rw") seeds `id_name` into an iso
 alias against a real attached table; the cell is dropped on teardown.
 """
 
-from driver import Fixture, requires, run_paired
+from ducktest import Fixture, requires, run_paired
 
 
-@requires(source=Fixture("id_name"), access="rw", properties={"commit": "plain", "storage": "managed"})
+@requires(
+    source=Fixture("id_name"),
+    access="rw",
+    properties={"commit": "plain", "storage": "managed"},
+)
 def test_attach(request, resources):
     run_paired(request, env=resources.env)

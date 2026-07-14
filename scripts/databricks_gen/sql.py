@@ -34,9 +34,17 @@ CATALOG_MANAGED_PROPS = {
 # canonicalized Fixture as a Databricks table (used by the CLI's `create --source` and the
 # provisioner's fixture seeding, via driver.fixtures.map_columns).
 DATABRICKS_TYPE_MAP = {
-    "INTEGER": "INT", "BIGINT": "BIGINT", "SMALLINT": "SMALLINT", "TINYINT": "TINYINT",
-    "VARCHAR": "STRING", "DOUBLE": "DOUBLE", "FLOAT": "FLOAT", "BOOLEAN": "BOOLEAN",
-    "DATE": "DATE", "TIMESTAMP": "TIMESTAMP", "DECIMAL": "DECIMAL",
+    "INTEGER": "INT",
+    "BIGINT": "BIGINT",
+    "SMALLINT": "SMALLINT",
+    "TINYINT": "TINYINT",
+    "VARCHAR": "STRING",
+    "DOUBLE": "DOUBLE",
+    "FLOAT": "FLOAT",
+    "BOOLEAN": "BOOLEAN",
+    "DATE": "DATE",
+    "TIMESTAMP": "TIMESTAMP",
+    "DECIMAL": "DECIMAL",
 }
 
 
@@ -46,7 +54,9 @@ def _client():
 
     host, token = os.environ.get(_HOST_ENV), os.environ.get(_TOKEN_ENV)
     if not (host and token):
-        raise ValueError(f"{_HOST_ENV} and {_TOKEN_ENV} must be set (workspace host + PAT).")
+        raise ValueError(
+            f"{_HOST_ENV} and {_TOKEN_ENV} must be set (workspace host + PAT)."
+        )
     return WorkspaceClient(host=host, token=token)
 
 
@@ -60,17 +70,28 @@ def execute(sql, *, catalog=None, schema=None):
 
     warehouse = os.environ.get(_WAREHOUSE_ENV)
     if not warehouse:
-        raise ValueError(f"{_WAREHOUSE_ENV} is not set (the SQL warehouse the statements run on).")
+        raise ValueError(
+            f"{_WAREHOUSE_ENV} is not set (the SQL warehouse the statements run on)."
+        )
     w = _client()
     resp = w.statement_execution.execute_statement(
-        warehouse_id=warehouse, statement=sql, catalog=catalog, schema=schema, wait_timeout="30s"
+        warehouse_id=warehouse,
+        statement=sql,
+        catalog=catalog,
+        schema=schema,
+        wait_timeout="30s",
     )
-    while resp.status and resp.status.state in (StatementState.PENDING, StatementState.RUNNING):
+    while resp.status and resp.status.state in (
+        StatementState.PENDING,
+        StatementState.RUNNING,
+    ):
         time.sleep(1)
         resp = w.statement_execution.get_statement(resp.statement_id)
     state = resp.status.state if resp.status else None
     if state != StatementState.SUCCEEDED:
-        detail = resp.status.error.message if (resp.status and resp.status.error) else state
+        detail = (
+            resp.status.error.message if (resp.status and resp.status.error) else state
+        )
         raise RuntimeError(f"Databricks SQL failed ({state}): {detail}\n  {sql}")
     rows = resp.result.data_array if resp.result else None
     return [tuple(r) for r in (rows or [])]
@@ -99,10 +120,14 @@ def _tblproperties(properties):
     return f"\n  TBLPROPERTIES ({items})"
 
 
-def build_create_table(fqn, columns=None, *, as_select=None, properties=None, location=None, replace=True):
+def build_create_table(
+    fqn, columns=None, *, as_select=None, properties=None, location=None, replace=True
+):
     """Build a CREATE [OR REPLACE] TABLE statement (exactly one of `columns` or `as_select`)."""
     if bool(columns) == bool(as_select):
-        raise ValueError("build_create_table needs exactly one of `columns` or `as_select`")
+        raise ValueError(
+            "build_create_table needs exactly one of `columns` or `as_select`"
+        )
     sql = f"{'CREATE OR REPLACE TABLE' if replace else 'CREATE TABLE IF NOT EXISTS'} {fqn}"
     if columns:
         sql += f" ({columns})"
@@ -117,7 +142,9 @@ def build_create_table(fqn, columns=None, *, as_select=None, properties=None, lo
 def build_insert(fqn, rows, *, columns=None):
     """Build an INSERT INTO ... VALUES statement from `rows` (list of python-scalar tuples)."""
     cols = f" ({columns})" if columns else ""
-    values = ", ".join("(" + ", ".join(sql_literal(v) for v in row) + ")" for row in rows)
+    values = ", ".join(
+        "(" + ", ".join(sql_literal(v) for v in row) + ")" for row in rows
+    )
     return f"INSERT INTO {fqn}{cols} VALUES {values}"
 
 
@@ -178,7 +205,9 @@ def split_statements(sql):
         c = sql[i]
         if c == "'":
             buf.append(c)
-            if in_str and i + 1 < n and sql[i + 1] == "'":  # '' -> escaped quote, stay in string
+            if (
+                in_str and i + 1 < n and sql[i + 1] == "'"
+            ):  # '' -> escaped quote, stay in string
                 buf.append("'")
                 i += 2
                 continue

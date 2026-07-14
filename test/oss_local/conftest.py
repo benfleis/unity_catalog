@@ -11,7 +11,7 @@ import pathlib
 
 import pytest
 
-from driver import register_provisioner
+from ducktest import register_provisioner
 from uc.oss import OssProvisioner
 from uc.server import uc_server  # noqa: F401  (re-exported dir-wide)
 

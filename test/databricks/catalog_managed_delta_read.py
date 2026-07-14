@@ -6,7 +6,7 @@ to the kernel for both the Spark-staged (id_name__cmt__spark) and DuckDB-promote
 (id_name__cmt__duckdb) commit tables. Read catalog: config.READ_CATALOG.
 """
 
-from driver import requires, run_paired
+from ducktest import requires, run_paired
 
 from uc.databricks import config
 

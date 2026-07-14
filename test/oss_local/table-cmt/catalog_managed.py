@@ -8,9 +8,13 @@ inserts. Depends on uc_server (the session container); the per-test table is dro
 teardown.
 """
 
-from driver import Fixture, requires, run_paired
+from ducktest import Fixture, requires, run_paired
 
 
-@requires(source=Fixture("id_name").Seed(None), access="rw", properties={"commit": "cmt", "storage": "managed"})
+@requires(
+    source=Fixture("id_name").Seed(None),
+    access="rw",
+    properties={"commit": "cmt", "storage": "managed"},
+)
 def test_catalog_managed(request, uc_server, resources):
     run_paired(request, env=resources.env)

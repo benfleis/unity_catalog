@@ -7,9 +7,13 @@ on teardown. The body exercises the staged-commit + backfill (delta.yaml v1) pro
 same @requires + provisioner also drive `pytest --cli`.
 """
 
-from driver import Fixture, requires, run_paired
+from ducktest import Fixture, requires, run_paired
 
 
-@requires(source=Fixture("id_name"), access="rw", properties={"commit": "cmt", "storage": "managed"})
+@requires(
+    source=Fixture("id_name"),
+    access="rw",
+    properties={"commit": "cmt", "storage": "managed"},
+)
 def test_write_catalog_managed(request, resources):
     run_paired(request, env=resources.env)

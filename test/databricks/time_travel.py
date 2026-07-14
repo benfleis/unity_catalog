@@ -6,7 +6,7 @@ CATALOG/SCHEMA, so the body attaches + reads AT (VERSION => n) through env.
 The read catalog is config.READ_CATALOG (env: DATABRICKS_READ_CATALOG).
 """
 
-from driver import requires, run_paired
+from ducktest import requires, run_paired
 
 from uc.databricks import config
 

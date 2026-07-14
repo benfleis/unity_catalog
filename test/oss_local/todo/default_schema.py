@@ -8,9 +8,13 @@ empty duck.cmt.${UC_TEST_TABLE} so the failure is unambiguously the default-sche
 resolution, not a missing table. Depends on uc_server (session container) AND resources.
 """
 
-from driver import Fixture, requires, run_paired
+from ducktest import Fixture, requires, run_paired
 
 
-@requires(source=Fixture("id_name").Seed(None), access="rw", properties={"commit": "cmt", "storage": "managed"})
+@requires(
+    source=Fixture("id_name").Seed(None),
+    access="rw",
+    properties={"commit": "cmt", "storage": "managed"},
+)
 def test_default_schema(request, uc_server, resources):
     run_paired(request, env=resources.env)

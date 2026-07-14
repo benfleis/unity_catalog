@@ -10,9 +10,13 @@ dir as ${UC_TEST_DATA} so the body's glob resolves; depends on uc_server (sessio
 container) AND resources (the per-test table, dropped on teardown).
 """
 
-from driver import Fixture, requires, run_paired
+from ducktest import Fixture, requires, run_paired
 
 
-@requires(source=Fixture("id_name").Seed(None), access="rw", properties={"commit": "plain", "storage": "external"})
+@requires(
+    source=Fixture("id_name").Seed(None),
+    access="rw",
+    properties={"commit": "plain", "storage": "external"},
+)
 def test_checkpoint(request, uc_server, resources):
     run_paired(request, env={**resources.env, "UC_TEST_DATA": uc_server.data_dir})

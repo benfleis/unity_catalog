@@ -7,9 +7,13 @@ which asserts they ARE called). The shared data round-trip is in oss_local/rw.te
 Depends on uc_server (session container) AND resources (the per-test table).
 """
 
-from driver import Fixture, requires, run_paired
+from ducktest import Fixture, requires, run_paired
 
 
-@requires(source=Fixture("id_name").Seed(None), access="rw", properties={"commit": "plain", "storage": "external"})
+@requires(
+    source=Fixture("id_name").Seed(None),
+    access="rw",
+    properties={"commit": "plain", "storage": "external"},
+)
 def test_catalog_managed(request, uc_server, resources):
     run_paired(request, env=resources.env)
