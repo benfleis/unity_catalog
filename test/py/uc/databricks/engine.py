@@ -38,7 +38,7 @@ from ducktest import (
 )  # find_duckdb: resolve tools from one build
 from ducktest.fixtures import (
     canonicalize,
-    load_fixture,
+    load_table_spec,
     map_columns,
     resolve_seed,
 )
@@ -380,7 +380,7 @@ class DatabricksProvisioner(_BaseProvisioner):
             if spec.property("storage") == "external"
             else None
         )
-        definition = load_fixture(spec.source, [_FIXTURES])
+        definition = load_table_spec(spec.source, [_FIXTURES])
         tbl = canonicalize(self._duckdb_cli(), definition)
         cols = ", ".join(f"{n} {t}" for n, t in map_columns(tbl, DATABRICKS_TYPE_MAP))
         rows = resolve_seed(spec.source.seed, tbl.seed_data)

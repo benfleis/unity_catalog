@@ -20,7 +20,7 @@ import os
 from dataclasses import dataclass, field
 
 from ducktest import Fixture, find_duckdb
-from ducktest.fixtures import canonicalize, load_fixture, map_columns, resolve_seed
+from ducktest.fixtures import canonicalize, load_table_spec, map_columns, resolve_seed
 
 from uc import REPO_ROOT, server, uctl
 from uc.identity import TableRef, build_env  # unified identity env contract
@@ -178,7 +178,7 @@ class OssProvisioner:
         rw -> a unique per-test `<name>_rw_<token>` (dropped on teardown); ro -> a shared
         table created ONCE per session (guarded; left for the session).
         """
-        definition = load_fixture(spec.source, [str(_FIXTURES)])
+        definition = load_table_spec(spec.source, [str(_FIXTURES)])
         table = canonicalize(duckdb_bin, definition)
         col_spec = ", ".join(f"{n} {t}" for n, t in map_columns(table, UC_TYPE_MAP))
 
