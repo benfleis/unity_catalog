@@ -43,10 +43,10 @@ def _emit(statements, dry_run):
 
 def cmd_create(args):
     """Fixture .sql (shape + seed) -> a Databricks table, via the neutral duckdb canonicalizer."""
-    from duckdb_pytest_driver.fixtures import canonicalize, map_columns, parse_fixture
+    from ducktest.fixtures import canonicalize, map_columns, parse_table_spec
 
     with open(args.source) as f:
-        definition = parse_fixture(f.read(), args.source)
+        definition = parse_table_spec(f.read(), args.source)
     table = canonicalize(_duckdb_bin(), definition)
     columns = ", ".join(
         f"{name} {typ}" for name, typ in map_columns(table, DATABRICKS_TYPE_MAP)

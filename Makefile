@@ -17,14 +17,12 @@ ENV_DATABRICKS_CMD ?= scripts/run_databricks_env
 include extension-ci-tools/makefiles/duckdb_extension.Makefile
 
 venv:
-	# Must be Python 3.12-3.14. The duckdb-pytest-driver (which brings pytest + xdist) is
-	# installed editable separately; here we only add the databricks-gen SDK dep. With uv:
-	#   uv venv --python 3.14 && ln -s .venv venv \
-	#     && uv pip install -e <path-to>/duckdb-pytest-driver'[xdist]' \
-	#     && uv pip install -r scripts/databricks_gen/requirements.txt
-	python3 --version | grep -q '^Python 3[.]1[2-4][.]'
-	python3 -m venv venv
-	${PYTHON_PIP} install -r scripts/databricks_gen/requirements.txt
+	# The whole test venv is declared in pyproject.toml (the driver[xdist] editable from ../driver, plus
+	# databricks-sdk); pytest config lives next door in pytest.ini. `uv sync` builds it from that one
+	# manifest — no more separate editable-driver install + scripts/databricks_gen/requirements.txt.
+	# Requires Python 3.12-3.14 (pinned in pyproject's requires-python). Then: `uv run pytest`.
+	uv sync
+	ln -sfn .venv venv
 
 # The suite is pytest-driven (duckdb-pytest-driver): pytest collects the .test files and runs
 # them through the unittest binary WITH provisioning (@requires fixtures, catalog setup, managed
