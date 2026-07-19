@@ -7,11 +7,11 @@ which asserts they ARE called). The shared data round-trip is in oss_local/rw.te
 Depends on uc_server (session container) AND resources (the per-test table).
 """
 
-from ducktest import Fixture, requires, run_paired
+from ducktest import TableSpec, requires, run_paired
 
 
 @requires(
-    source=Fixture("id_name").Seed(None),
+    source=TableSpec("id_name").Seed(None),
     access="rw",
     properties={"commit": "plain", "storage": "external"},
 )

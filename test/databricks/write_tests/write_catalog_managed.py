@@ -7,11 +7,11 @@ on teardown. The body exercises the staged-commit + backfill (delta.yaml v1) pro
 same @requires + provisioner also drive `pytest --cli`.
 """
 
-from ducktest import Fixture, requires, run_paired
+from ducktest import TableSpec, requires, run_paired
 
 
 @requires(
-    source=Fixture("id_name"),
+    source=TableSpec("id_name"),
     access="rw",
     properties={"commit": "cmt", "storage": "managed"},
 )

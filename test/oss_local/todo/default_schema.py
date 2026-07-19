@@ -8,11 +8,11 @@ empty duck.cmt.${UC_TEST_TABLE} so the failure is unambiguously the default-sche
 resolution, not a missing table. Depends on uc_server (session container) AND resources.
 """
 
-from ducktest import Fixture, requires, run_paired
+from ducktest import TableSpec, requires, run_paired
 
 
 @requires(
-    source=Fixture("id_name").Seed(None),
+    source=TableSpec("id_name").Seed(None),
     access="rw",
     properties={"commit": "cmt", "storage": "managed"},
 )

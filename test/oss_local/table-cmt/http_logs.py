@@ -7,11 +7,11 @@ local_oss_unity_catalog/http_logs.test. Depends on uc_server (session container)
 resources (the per-test table, dropped on teardown).
 """
 
-from ducktest import Fixture, requires, run_paired
+from ducktest import TableSpec, requires, run_paired
 
 
 @requires(
-    source=Fixture("id_name").Seed(None),
+    source=TableSpec("id_name").Seed(None),
     access="rw",
     properties={"commit": "cmt", "storage": "managed"},
 )

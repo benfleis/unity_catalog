@@ -1,6 +1,6 @@
 """Driver for catalog_managed.test (same-stem pairing -> one test).
 
-Declarative, mirroring the Databricks path: @requires(Fixture("id_name").Seed(None))
+Declarative, mirroring the Databricks path: @requires(TableSpec("id_name").Seed(None))
 asks the generic `resources` fixture -> OssProvisioner to instantiate a unique per-test
 EMPTY table `id_name_rw_<token>` in the cmt (catalog-managed) schema, and injects its
 name into the body as ${UC_TEST_TABLE}. `.Seed(None)` because the body does its own
@@ -8,11 +8,11 @@ inserts. Depends on uc_server (the session container); the per-test table is dro
 teardown.
 """
 
-from ducktest import Fixture, requires, run_paired
+from ducktest import TableSpec, requires, run_paired
 
 
 @requires(
-    source=Fixture("id_name").Seed(None),
+    source=TableSpec("id_name").Seed(None),
     access="rw",
     properties={"commit": "cmt", "storage": "managed"},
 )

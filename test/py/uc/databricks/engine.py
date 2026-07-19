@@ -32,17 +32,18 @@ from dataclasses import dataclass
 import pytest
 
 from ducktest import (
-    Fixture,
+    State,
+    TableSpec,
     find_duckdb,
     step,
-)  # find_duckdb: resolve tools from one build
+)  # find_duckdb: resolve tools from one build; State: the working provision object
 from ducktest.fixtures import (
     canonicalize,
     load_table_spec,
     map_columns,
     resolve_seed,
 )
-from ducktest.provision import Bindings
+from ducktest.provision import Bindings  # the FRAMEWORK Bindings (make_init_sql receives it)
 from ducktest.provision import Provisioner as _BaseProvisioner
 
 # The databricks_gen library (atomic SQL primitives over the SDK) lives in scripts/.
@@ -281,7 +282,7 @@ class DatabricksProvisioner(_BaseProvisioner):
         # Per-provision()-call bookkeeping for the unified identity env (see uc.identity /
         # WIP-identity-design.md) and the mono-cell default-schema reconciliation — reset
         # in before_provision(), accumulated in rw_target/ro_target, applied in
-        # finalize_bindings/env_for. The base doesn't track this; it's backend-shaped.
+        # finalize_state/env_for. The base doesn't track this; it's backend-shaped.
         self._refs = []
         self._cell_for_default = None
 
@@ -300,40 +301,40 @@ class DatabricksProvisioner(_BaseProvisioner):
         self._refs = []
         self._cell_for_default = None
 
-    def new_bindings(self, token, *, params=None) -> Bindings:
+    def new_state(self, token, *, params=None) -> State:
         write_catalog = os.environ[
             "UC_TEST_CATALOG"
         ]  # before_provision's ensure_env defaulted it (config.WRITE_CATALOG)
-        return Bindings(catalog=write_catalog, default_schema="main", token=token)
+        return State(token=token, catalog=write_catalog, default_schema="main")
 
-    def rw_target(self, spec, token, bindings, dry_run):
+    def rw_target(self, spec, token, state, dry_run):
         bare = spec.resolved_name()
         cell = cell_schema_name(
             spec.property("commit"), spec.property("storage"), token
         )
-        target = f"{bindings.catalog}.{cell}.{bare}"
-        self.ensure_isolated(f"{bindings.catalog}.{cell}", bindings, dry_run)
+        target = f"{state.catalog}.{cell}.{bare}"
+        self.ensure_isolated(f"{state.catalog}.{cell}", state, dry_run)
         if self._cell_for_default is None:
             self._cell_for_default = cell
-        bindings.tables.append(TableBinding(bare, target, "rw"))
-        self._refs.append(TableRef(bare, bindings.catalog, cell, bare, "rw"))
+        state.tables.append(TableBinding(bare, target, "rw"))
+        self._refs.append(TableRef(bare, state.catalog, cell, bare, "rw"))
         return target
 
-    def ro_target(self, spec, bindings):
+    def ro_target(self, spec, state):
         # ro sources are FQN strings naming a shared, premade/def table.
         target = _expand(spec.source)
         cat, sch, tbl = _split_source(target)
-        bindings.catalog, bindings.default_schema = cat, sch
-        bindings.tables.append(TableBinding(spec.resolved_name(), target, "ro"))
+        state.catalog, state.default_schema = cat, sch
+        state.tables.append(TableBinding(spec.resolved_name(), target, "ro"))
         self._refs.append(TableRef(spec.resolved_name(), cat, sch, tbl, "ro"))
         return target
 
-    def finalize_bindings(self, bindings):
+    def finalize_state(self, state):
         # Mono-cell default schema: the (first) rw cell if any, else the ro source schema.
         if self._cell_for_default is not None:
-            bindings.default_schema = self._cell_for_default
+            state.default_schema = self._cell_for_default
 
-    def env_for(self, bindings) -> dict:
+    def env_for(self, state) -> dict:
         # Primary (bare CATALOG/SCHEMA/TABLE) = the first rw cell, else the first ref.
         # Env a run path injects (body reads these; see the .test): the unified identity
         # contract (CATALOG/SCHEMA/TABLE + per-key {KEY}/{KEY_*} aliases). All DB bodies
@@ -344,21 +345,21 @@ class DatabricksProvisioner(_BaseProvisioner):
         )
         return build_env(self._refs, primary=primary)
 
-    def dry_run_summary(self, bindings):
-        print(f"cell schema(s): {bindings.isolated or '(none — all ro)'}")
-        print(f"DEFAULT_SCHEMA: {bindings.default_schema}")
+    def dry_run_summary(self, state):
+        print(f"cell schema(s): {state.isolated or '(none — all ro)'}")
+        print(f"DEFAULT_SCHEMA: {state.default_schema}")
 
-    def instantiate(self, spec, target, dry_run, bindings):
+    def instantiate(self, spec, target, dry_run, state):
         """Instantiate `target` from `spec`'s definition. Dispatches on definition TYPE (the
         instantiation method) -- independent of `access`, which set target + lifecycle above.
         """
-        if isinstance(spec.source, Fixture):
-            self._instantiate_fixture(spec, target, dry_run, bindings)
+        if isinstance(spec.source, TableSpec):
+            self._instantiate_fixture(spec, target, dry_run, state)
         else:
-            self._instantiate_def(target, dry_run, bindings)
+            self._instantiate_def(target, dry_run, state)
 
-    def _instantiate_fixture(self, spec, target, dry_run, bindings):
-        """Seed a portable Fixture into `target` with the 2x2 props/location (create + insert).
+    def _instantiate_fixture(self, spec, target, dry_run, state):
+        """Seed a portable TableSpec into `target` with the 2x2 props/location (create + insert).
 
         The one path for write/attach tests. Dry-run only NAMES the fixture + cell (no duckdb
         canonicalization, no I/O -- mirrors the OSS provisioner); the real path canonicalizes
@@ -367,7 +368,7 @@ class DatabricksProvisioner(_BaseProvisioner):
         """
         name = spec.source.name  # fixture logical name -- pure, no I/O
         cell_desc = f"{spec.property('commit') or 'plain'}/{spec.property('storage') or 'managed'}"
-        bindings.plan.append(
+        state.plan.append(
             f"[{spec.access}] seed {target} from fixture {name!r} ({cell_desc})"
         )
         if dry_run:
@@ -389,7 +390,7 @@ class DatabricksProvisioner(_BaseProvisioner):
             if rows:
                 insert(target, rows)
 
-    def _instantiate_def(self, target, dry_run, bindings):
+    def _instantiate_def(self, target, dry_run, state):
         """Run a Databricks Delta-artifact def (test/databricks/data/<table>.sql) verbatim; a
         companion <table>.insert.sql seeds via the DuckDB UC write path (the cmt__duckdb case).
         No def -> the table is treated as premade (reference only, no DDL).
@@ -397,17 +398,17 @@ class DatabricksProvisioner(_BaseProvisioner):
         _, _, table = _split_source(target)
         def_path = os.path.join(_DATA_DIR, f"{table}.sql")
         if not os.path.isfile(def_path):
-            bindings.plan.append(f"[ro] reference {target} (premade, no def)")
+            state.plan.append(f"[ro] reference {target} (premade, no def)")
             return
         with open(def_path) as f:
             external = "{location}" in f.read()
         location = self._s3_location(target) if external else None
         insert_path = os.path.join(_DATA_DIR, f"{table}.insert.sql")
-        bindings.plan.append(
+        state.plan.append(
             f"[ro] provision {target} from {os.path.basename(def_path)}"
         )
         if os.path.isfile(insert_path):
-            bindings.plan.append(
+            state.plan.append(
                 f"    + DuckDB UC insert ({os.path.basename(insert_path)})"
             )
         if dry_run:
@@ -469,7 +470,11 @@ class DatabricksProvisioner(_BaseProvisioner):
         from the SAME build as the resolved tools (find_duckdb); redact=True (used by
         --provision-dry-run, which prints this without launching) falls back to the
         env/default so it needs no built binary, and masks the token.
+
+        Receives the FRAMEWORK Bindings; the backend-shaped catalog/default_schema/tables
+        live under `bindings.backend` (the working State), not on Bindings itself.
         """
+        state = bindings.backend
         if redact:
             # dry-run print: must not require a built binary.
             build_dir = os.environ.get(
@@ -494,7 +499,7 @@ class DatabricksProvisioner(_BaseProvisioner):
 
         table_lines = "\n".join(
             f".print '  {t.requirement_name}  ->  {t.fqn}  ({t.access})'"
-            for t in bindings.tables
+            for t in state.tables
         )
 
         return f"""-- Auto-generated by uc.databricks.engine.make_init_sql for `duckdb -unsigned -init`.
@@ -511,12 +516,12 @@ CREATE SECRET (
     AWS_REGION '{region}'
 );
 
-ATTACH '{bindings.catalog}' AS unity (TYPE unity_catalog, DEFAULT_SCHEMA '{bindings.default_schema}');
+ATTACH '{state.catalog}' AS unity (TYPE unity_catalog, DEFAULT_SCHEMA '{state.default_schema}');
 USE unity;
 
 .print ''
 .print '== pytest --cli ready =='
-.print 'Attached: unity -> {bindings.catalog}, DEFAULT_SCHEMA {bindings.default_schema}'
+.print 'Attached: unity -> {state.catalog}, DEFAULT_SCHEMA {state.default_schema}'
 .print 'Provisioned (reference tables BARE; the cell IS the default schema):'
 {table_lines}
 .print ''

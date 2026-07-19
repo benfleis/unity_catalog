@@ -10,11 +10,11 @@ dir as ${UC_TEST_DATA} so the body's glob resolves; depends on uc_server (sessio
 container) AND resources (the per-test table, dropped on teardown).
 """
 
-from ducktest import Fixture, requires, run_paired
+from ducktest import TableSpec, requires, run_paired
 
 
 @requires(
-    source=Fixture("id_name").Seed(None),
+    source=TableSpec("id_name").Seed(None),
     access="rw",
     properties={"commit": "plain", "storage": "external"},
 )

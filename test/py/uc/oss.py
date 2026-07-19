@@ -3,7 +3,7 @@
 Serves BOTH the driver's generic `resources` fixture (the run path) and `--repl`:
 
   * RUN path (a session `uc_server` is active): reuse that container and INSTANTIATE
-    each `@requires(source=Fixture(...))` as a table via the duckdb middleman
+    each `@requires(source=TableSpec(...))` as a table via the duckdb middleman
     (load -> canonicalize -> map to UC types -> `uctl create`). rw specs get a unique
     per-test table `<name>_rw_<token>` (dropped on teardown); ro specs get a shared
     table created once per session. The body reads the rw table via ${UC_TEST_TABLE}.
@@ -13,13 +13,13 @@ Serves BOTH the driver's generic `resources` fixture (the run path) and `--repl`
 
 The `storage` axis maps onto ducklabs' seeded schema names (managed -> cmt, external ->
 plain). Seed-data insertion into UC is not wired yet, so seeded fixtures must use
-`Fixture(...).Seed(None)` (empty table; the body does its own inserts) for now.
+`TableSpec(...).Seed(None)` (empty table; the body does its own inserts) for now.
 """
 
 import os
 from dataclasses import dataclass, field
 
-from ducktest import Fixture, find_duckdb
+from ducktest import TableSpec, find_duckdb
 from ducktest.fixtures import canonicalize, load_table_spec, map_columns, resolve_seed
 
 from uc import REPO_ROOT, server, uctl
@@ -32,7 +32,7 @@ _EXTS = ("parquet", "httpfs", "delta", "unity_catalog")
 _SEED_TABLE = "id_name"
 _SEED_COLUMNS = "id INT, name STRING"
 
-# Fixture root (uc-module-generic, shared by oss + databricks).
+# TableSpec root (uc-module-generic, shared by oss + databricks).
 _FIXTURES = REPO_ROOT / "test" / "fixtures"
 
 # DuckDB logical types -> UC/Spark types for `uctl create` column specs.
@@ -117,12 +117,12 @@ class OssProvisioner:
         if dry_run:
             b.plan.append(f"start OSS UC container {server.IMAGE} on {server.ENDPOINT}")
             for s in specs:
-                if isinstance(s.source, Fixture):
+                if isinstance(s.source, TableSpec):
                     b.plan.append(
                         f"instantiate fixture {s.source.name!r} -> "
                         f"{_storage_to_schema(s.property('storage'))} ({s.access})"
                     )
-            if not any(isinstance(s.source, Fixture) for s in specs):
+            if not any(isinstance(s.source, TableSpec) for s in specs):
                 for schema in server._SEED_SCHEMAS:
                     b.plan.append(
                         f'uctl create {schema} {_SEED_TABLE} "{_SEED_COLUMNS}"'
@@ -146,12 +146,12 @@ class OssProvisioner:
                 b.seeded.append((schema, _SEED_TABLE))
             return b
 
-        # RUN path: reuse the session container; instantiate each Fixture spec as a table.
+        # RUN path: reuse the session container; instantiate each TableSpec spec as a table.
         duckdb_bin = self._duckdb_cli()
         refs = []  # unified identity refs -> bindings.env (see uc.identity)
         primary_ref = None
         for s in specs:
-            if not isinstance(s.source, Fixture):
+            if not isinstance(s.source, TableSpec):
                 continue
             schema = _storage_to_schema(s.property("storage"))
             name = self._instantiate(duckdb_bin, s, schema, token, b)
@@ -193,7 +193,7 @@ class OssProvisioner:
         if rows:
             raise NotImplementedError(
                 f"OSS seed-data insertion is not wired yet (fixture {name!r} would seed "
-                f"{len(rows)} rows). Use Fixture(...).Seed(None) for an empty table until "
+                f"{len(rows)} rows). Use TableSpec(...).Seed(None) for an empty table until "
                 "the UC insert path lands."
             )
         uctl("drop", schema, name, check=False)  # clean slate (rw) / first create (ro)
