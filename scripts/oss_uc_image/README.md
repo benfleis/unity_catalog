@@ -23,7 +23,7 @@ preconfigured for dev and CI:
 | `patches/`        | UC source patches applied to the checkout at build time (see S3 section) |
 | `server.properties` | duck server config (managed on, auth off, local FS)                  |
 | `entrypoint.sh`   | starts server, waits, idempotently seeds `duck` + `cmt`/`plain` |
-| `build`        | two-step build (source base → overlay)                                 |
+| `build_image`  | two-step build + `--push`/`--merge` (source base → overlay); see Publishing |
 | `run`          | the single `docker run -v …` line (dev + CI)                           |
 | `uctl`         | host table mgmt via `docker exec … bin/uc …`                           |
 | `smoke_test`   | boots a throwaway container, create/drop in each schema, asserts files |
@@ -32,8 +32,8 @@ preconfigured for dev and CI:
 
 ```bash
 # UC source checkout is found via $UC_REPO (default ~/src/d/unitycatalog)
-./build                              # slow first time (sbt build); cached after
-./build --uc-repo /path/to/uc        # ...or point at a different checkout
+./build_image                        # slow first time (sbt build); cached after
+./build_image --uc-repo /path/to/uc  # ...or point at a different checkout
 ./run                                # starts container, binds a fresh temp dir, prints where
 ./run /path/to/datadir               # ...or bind a dir you choose
 
@@ -47,25 +47,50 @@ docker stop uc-duck
 
 ## Image naming
 
-`build` derives the tag from the checkout (version in the **tag**, the
-conventional way):
+`build_image` derives the tag from the UC checkout (version + UC sha in the **tag**):
 
 ```
-duckdb/unitycatalog:<version>--<branch>-<gitref7>
-  e.g. duckdb/unitycatalog:0.5.0-snapshot--main-1321705-dirty
+ghcr.io/benfleis/ducktest-unitycatalog:<version>-uc<gitref7>
+  e.g. ghcr.io/benfleis/ducktest-unitycatalog:0.5.0-snapshot-uc1321705
 ```
 
-- `<version>` = `version.sbt` (lowercased); `<branch>` = current branch (sanitized
-  for tag-legal chars; `HEAD` if detached); `<gitref7>` = 7-char SHA; `-dirty`
-  appended when the work tree has uncommitted changes. The full SHA is also stamped
-  as the `org.opencontainers.image.revision` label (`docker inspect`).
-- The base (source-built) image is `duckdb/unitycatalog-base:<same-tag>`, keyed to
-  the same ref so a new commit triggers a fresh sbt build.
-- A stable alias **`duckdb/unitycatalog:local`** is also applied; `run`,
-  `uctl`, and `smoke_test` default to it.
-- Namespace/stem are `IMAGE_NS` / `IMAGE_NAME` env vars (default `duckdb` /
-  `unitycatalog`). A future pre-populated variant would slot in as
-  `duckdb/unitycatalog-<variant>:<tag>`.
+- `<version>` = `version.sbt` (lowercased); `<gitref7>` = 7-char UC SHA. Branch and a
+  `-dirty` flag are intentionally omitted from the published tag (the build patches the
+  UC source, so it always reads dirty, and the checkout is usually detached). The full
+  SHA is stamped as the `org.opencontainers.image.revision` label (`docker inspect`).
+- The base (source-built) image is `ghcr.io/benfleis/ducktest-unitycatalog-base:<same-tag>`,
+  keyed to the same ref so a new commit triggers a fresh sbt build.
+- A stable alias **`ghcr.io/benfleis/ducktest-unitycatalog:local`** is applied on a local
+  (native) build; `run`, `uctl`, and `smoke_test` default to it. The canonical registry
+  `:<tag>` is a proper multi-arch manifest, assembled by `build_image --merge`.
+- Namespace/stem are `IMAGE_NS` / `IMAGE_NAME` env vars (default `ghcr.io/benfleis` /
+  `ducktest-unitycatalog`). Override `IMAGE_NS` to publish elsewhere.
+
+## Publishing to ghcr
+
+The build scripts do **no auth** — they call `docker push` / `docker buildx imagetools`, which use
+whatever `docker login` you already ran. So the same commands publish locally and in CI; only the login
+differs (a personal PAT locally, `GHCR_PAT`/`GITHUB_TOKEN` in the workflow).
+
+Publish from a native **amd64 Linux** box (arm64: run the same on an Apple-Silicon Mac):
+
+```bash
+docker login ghcr.io -u <you>                                          # a PAT with write:packages, once
+UC_REPO=/path/to/unitycatalog scripts/oss_uc_image/build_image --push  # build + push :<tag>-<arch>
+scripts/oss_uc_image/build_image --merge --alias ci                    # stitch :<tag>, move the :ci alias
+```
+
+- `--push` publishes the arch-suffixed `:<tag>-<arch>`; `--merge` assembles the canonical multi-arch
+  `:<tag>` from whatever arch slices exist; `--alias ci` moves a stable **`:ci`** tag onto it.
+- **`:ci` is what consumers pull.** The UC suite's `.github/workflows/Ducktest.yml` sets
+  `UC_DUCK_IMAGE=…:ci` and `test/py/uc/server.py` reads it (defaulting to `:local` for dev).
+- **Multi-arch:** build each arch natively where it's cheap and re-merge — e.g. amd64 in CI, arm64 from a
+  Mac (`build_image --push` there), then `build_image --merge --alias ci` picks up both. No QEMU.
+- A republish reuses an already-pushed base (build_image consults the registry), so only the first
+  publish pays the slow sbt build.
+- **In CI:** `.github/workflows/publish-uc-image.yml` — manual `workflow_dispatch`, guarded to the owner
+  + default branch, GHCR_PAT auth — runs exactly the amd64 flow above. It only shows in the Actions UI
+  once it's on the default branch, and the package must be public for the anonymous CI pull.
 
 ## The two axes (important)
 

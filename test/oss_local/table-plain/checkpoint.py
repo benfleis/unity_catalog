@@ -1,6 +1,6 @@
 """Driver for table-plain/checkpoint.test (same-stem pairing -> one test).
 
-Ports the legacy oss_local/todo/checkpoint.test to the OSS UC "ducklabs" container,
+Ports the legacy oss_local/todo/checkpoint.test to the OSS UC "ducktest" container,
 retargeted at duck.plain (plain Delta). @requires provisions a unique empty EXTERNAL
 table (duck.plain.${UC_TEST_TABLE}); EXTERNAL tables store their log at
 <data_dir>/duck/plain/<table>/_delta_log/..., so the body's final glob assertion

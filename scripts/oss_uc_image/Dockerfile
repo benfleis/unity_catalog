@@ -3,7 +3,7 @@
 # and this overlay separate means we don't re-run sbt when only the duck
 # config/scripts change, and the UC checkout stays untouched. build always
 # passes --build-arg BASE=...; the default below is only for standalone builds.
-ARG BASE=duckdb/unitycatalog-base:local
+ARG BASE=ghcr.io/benfleis/ducktest-unitycatalog-base:local
 FROM ${BASE}
 
 USER root

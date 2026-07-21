@@ -7,8 +7,11 @@ stays the central artifact; the Python is thin glue.
 
 ## Layout
 
-- **`oss_local/`** — run against a **local OSS Unity Catalog** server (the ducklabs docker image,
+- **`oss_local/`** — run against a **local OSS Unity Catalog** server (the ducktest docker image,
   started per session by the `uc_server` fixture). Runs in CI. `-m oss_local` selects the subtree.
+  The image (`ghcr.io/benfleis/ducktest-unitycatalog`, `:ci` is the tag CI pulls) is built and
+  published from [`scripts/oss_uc_image/`](../scripts/oss_uc_image/README.md) — see that README for the
+  build + publish process.
 - **`databricks/`** — run against a **live Databricks workspace** (creds via
   `scripts/run_databricks_env` → `DATABRICKS_*` + `DATABRICKS_WAREHOUSE_ID`). Not in CI; tests skip
   gracefully without creds. Read tables auto-provision from the Delta-artifact defs in

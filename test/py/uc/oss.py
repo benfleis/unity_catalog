@@ -11,7 +11,7 @@ Serves BOTH the driver's generic `resources` fixture (the run path) and `--repl`
   * --repl (no fixtures run, so the provisioner owns the container): start a fresh
     container and seed the legacy playground table `id_name` in both schemas. Unchanged.
 
-The `storage` axis maps onto ducklabs' seeded schema names (managed -> cmt, external ->
+The `storage` axis maps onto ducktest' seeded schema names (managed -> cmt, external ->
 plain). Seed-data insertion into UC is not wired yet, so seeded fixtures must use
 `TableSpec(...).Seed(None)` (empty table; the body does its own inserts) for now.
 """
@@ -88,7 +88,7 @@ def _default_schema_for(specs):
 
 
 class OssProvisioner:
-    """Provisioner protocol impl (driver/provision.py) for the OSS UC ducklabs container."""
+    """Provisioner protocol impl (driver/provision.py) for the OSS UC ducktest container."""
 
     def __init__(self, config=None):
         # config lets us resolve the duckdb CLI from the SAME build the driver runs the

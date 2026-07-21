@@ -7,11 +7,11 @@
 #     <tmp>/duck/plain and does NOT carry it,
 # then tears everything down. Exit 0 = pass. Intended for CI.
 #
-# Env: FINAL_IMAGE (default ghcr.io/benfleis/unitycatalog-ducklabs:local), UC_DUCK_PORT (default 8088).
+# Env: FINAL_IMAGE (default ghcr.io/benfleis/ducktest-unitycatalog:local), UC_DUCK_PORT (default 8088).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IMAGE="${FINAL_IMAGE:-ghcr.io/benfleis/unitycatalog-ducklabs:local}"
+IMAGE="${FINAL_IMAGE:-ghcr.io/benfleis/ducktest-unitycatalog:local}"
 PORT="${UC_DUCK_PORT:-8088}"
 CONTAINER="uc-duck-smoke-$$"
 TMPDIR_DATA="$(mktemp -d -t uc-duck-smoke-XXXXXX)"

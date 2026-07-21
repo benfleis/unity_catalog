@@ -74,6 +74,9 @@ jobs:
       run:
         working-directory: main
     env:
+      # OSS UC container image: the stable :ci alias published by publish-uc-image.yml. server.py reads
+      # UC_DUCK_IMAGE (defaults to :local for dev); CI overrides it to the registry alias.
+      UC_DUCK_IMAGE: ghcr.io/benfleis/ducktest-unitycatalog:ci
       # --- build env, lifted from LocalTesting.yml (the proven build recipe) ------------------------
       VCPKG_TARGET_TRIPLET: x64-linux
       GEN: ninja
@@ -148,13 +151,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      # TODO(build-integration): the OSS suite boots `ghcr.io/benfleis/unitycatalog-ducklabs:local`
-      # (test/py/uc/server.py IMAGE). Confirm CI can obtain it before the suite runs — either it is
-      # pushed to GHCR (public → this pull works as-is; private → add a docker/login-action step with
-      # GITHUB_TOKEN or a PAT), OR it must be built in CI via scripts/oss_uc_image/build_image. The
-      # `:local` tag suggests a local build today, so this pull will likely fail until that is resolved.
+      # The OSS suite boots $UC_DUCK_IMAGE (test/py/uc/server.py). It's the multi-arch :ci alias published
+      # by publish-uc-image.yml; warm the cache here so a missing/unpullable image fails fast and loud
+      # (public package → anonymous pull works; if the package is private add a docker login step).
       - name: Pull OSS Unity Catalog image (warm cache, fail fast if unpullable)
-        run: docker pull ghcr.io/benfleis/unitycatalog-ducklabs:local
+        run: docker pull "$UC_DUCK_IMAGE"
 
       - name: OSS-local suite (default `oss_local`; boots the UC container)
         # -n0 -s: serial + unbuffered so container/seed output streams live (xdist buffers it).

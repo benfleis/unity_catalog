@@ -28,7 +28,7 @@ venv:
 # them through the unittest binary WITH provisioning (@requires fixtures, catalog setup, managed
 # teardown). Point extension-ci-tools' test chain (test -> test_release -> test_release_internal)
 # at pytest instead of its raw binary run, which would bypass the provisioner. So `make test` ==
-# pytest; needs a built $(BUILD_DIR). OSS runs against the ducklabs container; databricks skips
+# pytest; needs a built $(BUILD_DIR). OSS runs against the ducktest container; databricks skips
 # without creds -- use `make test_databricks` (wraps run_databricks_env). (Make warns once about
 # overriding test_release_internal -- expected.)
 test_release_internal:

@@ -1,6 +1,6 @@
 """OSS Unity Catalog server -- the shared docker service backing oss_local tests.
 
-A running OSS UC "ducklabs" docker container, provisioned per invocation and shared across xdist
+A running OSS UC docker container, provisioned per invocation and shared across xdist
 workers via the driver STORE (first-need-wins single-flight -- see driver `provision_service` /
 `copy_or_provision`), then stopped once by the controller at session end (driver `_stop_services`).
 
@@ -35,7 +35,7 @@ from uc import SCRIPTS_DIR
 # guarantees (identical host==container data dir); hence we provision via `run`.
 CONTAINER = os.environ.get("UC_DUCK_CONTAINER", "uc-duck")
 PORT = int(os.environ.get("UC_DUCK_PORT", "8080"))
-IMAGE = os.environ.get("UC_DUCK_IMAGE", "ghcr.io/benfleis/unitycatalog-ducklabs:local")
+IMAGE = os.environ.get("UC_DUCK_IMAGE", "ghcr.io/benfleis/ducktest-unitycatalog:local")
 ENDPOINT = f"http://127.0.0.1:{PORT}"
 
 _CATALOG = "duck"

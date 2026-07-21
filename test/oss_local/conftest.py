@@ -33,7 +33,7 @@ def pytest_configure(config):
 
 @pytest.fixture(autouse=True)
 def _uc_test_catalog(monkeypatch):
-    """Inject ${UC_TEST_CATALOG} for OSS bodies (the seeded ducklabs catalog is `duck`).
+    """Inject ${UC_TEST_CATALOG} for OSS bodies (the seeded ducktest catalog is `duck`).
 
     Scoped per-test via monkeypatch so it auto-restores -- it never leaks to a
     databricks test in a mixed run (whose provisioner resolves its own catalog).
