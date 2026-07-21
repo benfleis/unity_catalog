@@ -1,6 +1,6 @@
 # name: test/oss_local/table-cmt/http_logs.test
 # description: HTTP prefetch logging against the OSS UC ducktest image -- querying through an attached catalog emits unity-catalog API requests visible via duckdb_logs_parsed('HTTP'). Ports the old http_logs.test. Paired http_logs.py provisions a unique empty duck.cmt.{UC_TEST_TABLE}.
-# group: [oss_local]
+# group: [table-cmt]
 
 require parquet
 

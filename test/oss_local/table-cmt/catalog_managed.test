@@ -1,6 +1,6 @@
 # name: test/oss_local/table-cmt/catalog_managed.test
 # description: catalog-managed PROTOCOL contrast -- duck.cmt tables ARE catalog-managed, so reading calls LoadTable and writing calls UpdateTable (delta.yaml v1). The shared data round-trip lives in oss_local/rw.test; this asserts ONLY the protocol calls (the cmt half of the contrast with table-plain/catalog_managed). Paired catalog_managed.py provisions an empty duck.cmt.{UC_TEST_TABLE}.
-# group: [oss_local]
+# group: [table-cmt]
 
 require parquet
 

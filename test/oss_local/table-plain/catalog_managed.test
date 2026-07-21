@@ -1,6 +1,6 @@
 # name: test/oss_local/table-plain/catalog_managed.test
 # description: catalog-managed PROTOCOL contrast (absence) -- duck.plain tables are plain Delta logs with no UC commit coordination, so reading does NOT call LoadTable and writing does NOT call UpdateTable. The shared data round-trip lives in oss_local/rw.test; this asserts ONLY the absence of the protocol calls (the plain half of the contrast with table-cmt/catalog_managed). Paired catalog_managed.py provisions a unique empty duck.plain.{UC_TEST_TABLE}.
-# group: [oss_local]
+# group: [table-plain]
 
 require parquet
 
