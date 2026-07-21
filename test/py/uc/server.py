@@ -35,7 +35,10 @@ from uc import SCRIPTS_DIR
 # guarantees (identical host==container data dir); hence we provision via `run`.
 CONTAINER = os.environ.get("UC_DUCK_CONTAINER", "uc-duck")
 PORT = int(os.environ.get("UC_DUCK_PORT", "8080"))
-IMAGE = os.environ.get("UC_DUCK_IMAGE", "ghcr.io/benfleis/ducktest-unitycatalog:local")
+# `:ci` is the published multi-arch tag CI and local runs both use by default; iterating on the
+# image ITSELF (scripts/oss_uc_image/build_image tags `:local` locally) means overriding
+# UC_DUCK_IMAGE back to `:local`.
+IMAGE = os.environ.get("UC_DUCK_IMAGE", "ghcr.io/benfleis/ducktest-unitycatalog:ci")
 ENDPOINT = f"http://127.0.0.1:{PORT}"
 
 _CATALOG = "duck"

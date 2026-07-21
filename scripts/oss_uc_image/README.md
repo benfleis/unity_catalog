@@ -60,9 +60,12 @@ ghcr.io/benfleis/ducktest-unitycatalog:<version>-uc<gitref7>
   SHA is stamped as the `org.opencontainers.image.revision` label (`docker inspect`).
 - The base (source-built) image is `ghcr.io/benfleis/ducktest-unitycatalog-base:<same-tag>`,
   keyed to the same ref so a new commit triggers a fresh sbt build.
-- A stable alias **`ghcr.io/benfleis/ducktest-unitycatalog:local`** is applied on a local
-  (native) build; `run`, `uctl`, and `smoke_test` default to it. The canonical registry
-  `:<tag>` is a proper multi-arch manifest, assembled by `build_image --merge`.
+- Two tags, one meaning each: **`:local`** is the image you just built — the `oss_uc_image/`
+  toolkit works on it (`build_image` stamps it on a native build; `run`/`smoke_test` default to
+  it) — and **`:ci`** is the validated, published image the test suite (`server.py`) and CI
+  consume. You promote `:local`→`:ci` with `build_image --merge --alias ci` once `smoke_test`
+  passes (see Publishing). The canonical registry `:<tag>` is a proper multi-arch manifest,
+  assembled by that same `--merge`.
 - Namespace/stem are `IMAGE_NS` / `IMAGE_NAME` env vars (default `ghcr.io/benfleis` /
   `ducktest-unitycatalog`). Override `IMAGE_NS` to publish elsewhere.
 
@@ -76,14 +79,16 @@ Publish from a native **amd64 Linux** box (arm64: run the same on an Apple-Silic
 
 ```bash
 docker login ghcr.io -u <you>                                          # a PAT with write:packages, once
-UC_REPO=/path/to/unitycatalog scripts/oss_uc_image/build_image --push  # build + push :<tag>-<arch>
-scripts/oss_uc_image/build_image --merge --alias ci                    # stitch :<tag>, move the :ci alias
+UC_REPO=/path/to/unitycatalog scripts/oss_uc_image/build_image --push  # build :local + push :<tag>-<arch>
+scripts/oss_uc_image/smoke_test                                        # GATE: validate :local (per arch)
+scripts/oss_uc_image/build_image --merge --alias ci                    # promote -> :ci (once all arches pass)
 ```
 
 - `--push` publishes the arch-suffixed `:<tag>-<arch>`; `--merge` assembles the canonical multi-arch
   `:<tag>` from whatever arch slices exist; `--alias ci` moves a stable **`:ci`** tag onto it.
-- **`:ci` is what consumers pull.** The UC suite's `.github/workflows/Ducktest.yml` sets
-  `UC_DUCK_IMAGE=…:ci` and `test/py/uc/server.py` reads it (defaulting to `:local` for dev).
+- **`:ci` is what consumers pull.** `server.py` defaults to it and CI's `Ducktest.yml` sets
+  `UC_DUCK_IMAGE=…:ci` explicitly; the `build_image`/`run`/`smoke_test` toolkit works on `:local`.
+  The `--merge --alias ci` above is the promotion — run it only after `smoke_test` passes.
 - **Multi-arch:** build each arch natively where it's cheap and re-merge — e.g. amd64 in CI, arm64 from a
   Mac (`build_image --push` there), then `build_image --merge --alias ci` picks up both. No QEMU.
 - A republish reuses an already-pushed base (build_image consults the registry), so only the first

@@ -9,7 +9,8 @@
 #          HOST client too). Defaults to a fresh temp dir (printed below).
 #
 # Env overrides: UC_DUCK_CONTAINER (default uc-duck), UC_DUCK_PORT (default 8080),
-#                FINAL_IMAGE (default ghcr.io/benfleis/ducktest-unitycatalog:local, the alias build_image tags).
+#                FINAL_IMAGE (default ghcr.io/benfleis/ducktest-unitycatalog:local -- the local build build_image tags. The driver overrides FINAL_IMAGE=...:ci
+#                to boot the published image; set it yourself to do the same by hand.
 set -euo pipefail
 
 CONTAINER="${UC_DUCK_CONTAINER:-uc-duck}"
@@ -23,6 +24,7 @@ HOSTDIR="$(cd "$HOSTDIR" && pwd)"
 # Mount host==container path and point the server at it: UC records absolute
 # file:// locations, which only resolve for a host client if the path matches.
 docker run --rm -d \
+  --user "$(id -u):2008" \
   --name "$CONTAINER" \
   -p "$PORT:8080" \
   -v "$HOSTDIR:$HOSTDIR" \

@@ -54,11 +54,14 @@ COPY --from=base --parents \
     $HOME/.cache/ \
     /
 
-# Create a service user with read and execute permissions and write permissions of the ./etc directory
+# Create the service user/group with a PINNED uid+gid of 2008 (deliberately eyeball-obvious in `stat`).
+# Callers run `--user $(id -u):2008`: the process writes bind-mounted host dirs as the invoking host uid
+# (so the HOST owns the files -> clean host reads / cleanup / temp-dir sweep), while gid 2008 keeps group
+# rwx on this 550/770 $HOME so the server can still write its etc/ (H2 metastore + config).
 RUN <<EOF
 apk add --no-cache bash
-addgroup -S $USER
-adduser -S -G $USER $USER
+addgroup -g 2008 $USER
+adduser -S -u 2008 -G $USER $USER
 chmod -R 550 $HOME
 mkdir -p $HOME/etc/
 chmod -R 770 $HOME/etc/

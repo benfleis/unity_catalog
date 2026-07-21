@@ -7,7 +7,7 @@
 #     <tmp>/duck/plain and does NOT carry it,
 # then tears everything down. Exit 0 = pass. Intended for CI.
 #
-# Env: FINAL_IMAGE (default ghcr.io/benfleis/ducktest-unitycatalog:local), UC_DUCK_PORT (default 8088).
+# Env: FINAL_IMAGE (default ghcr.io/benfleis/ducktest-unitycatalog:local -- smokes the build you just made; set =...:ci to smoke the published image), UC_DUCK_PORT (default 8088).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,9 +17,16 @@ CONTAINER="uc-duck-smoke-$$"
 TMPDIR_DATA="$(mktemp -d -t uc-duck-smoke-XXXXXX)"
 export UC_DUCK_CONTAINER="$CONTAINER"
 
-pass=0; fail=0
-ok()   { echo "  PASS: $1"; pass=$((pass+1)); }
-bad()  { echo "  FAIL: $1" >&2; fail=$((fail+1)); }
+pass=0
+fail=0
+ok() {
+  echo "  PASS: $1"
+  pass=$((pass + 1))
+}
+bad() {
+  echo "  FAIL: $1" >&2
+  fail=$((fail + 1))
+}
 
 cleanup() {
   # Keep the container (and its logs) around on failure, or when SMOKE_KEEP=1,
@@ -36,21 +43,30 @@ cleanup() {
 trap cleanup EXIT
 
 echo ">> starting $CONTAINER (image $IMAGE, data $TMPDIR_DATA)"
-docker run -d --name "$CONTAINER" -p "$PORT:8080" \
+docker run -d --user "$(id -u):2008" --name "$CONTAINER" -p "$PORT:8080" \
   -v "$TMPDIR_DATA:$TMPDIR_DATA" -e "UC_DUCK_DATA_DIR=$TMPDIR_DATA" "$IMAGE" >/dev/null
 
 echo ">> waiting for seed (duck.cmt + duck.plain)..."
 ready=
 for _ in $(seq 1 90); do
-  if docker exec "$CONTAINER" bin/uc schema get --full_name duck.cmt  >/dev/null 2>&1 \
-  && docker exec "$CONTAINER" bin/uc schema get --full_name duck.plain >/dev/null 2>&1; then
-    ready=1; break
+  if docker exec "$CONTAINER" bin/uc schema get --full_name duck.cmt >/dev/null 2>&1 &&
+    docker exec "$CONTAINER" bin/uc schema get --full_name duck.plain >/dev/null 2>&1; then
+    ready=1
+    break
   fi
-  docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null | grep -q true \
-    || { bad "container died early; logs:"; docker logs "$CONTAINER" 2>&1 | tail -40 >&2; exit 1; }
+  docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null | grep -q true ||
+    {
+      bad "container died early; logs:"
+      docker logs "$CONTAINER" 2>&1 | tail -40 >&2
+      exit 1
+    }
   sleep 1
 done
-[ -n "$ready" ] || { bad "seed did not complete in time; logs:"; docker logs "$CONTAINER" 2>&1 | tail -40 >&2; exit 1; }
+[ -n "$ready" ] || {
+  bad "seed did not complete in time; logs:"
+  docker logs "$CONTAINER" 2>&1 | tail -40 >&2
+  exit 1
+}
 ok "catalog 'duck' + schemas 'cmt'/'plain' seeded"
 
 uctl() { "$SCRIPT_DIR/uctl" "$@"; }
@@ -85,10 +101,10 @@ fi
 
 # --- drop loop ---------------------------------------------------------------
 echo ">> drop"
-uctl drop cmt    id_name >/dev/null && ok "dropped duck.cmt.id_name"   || bad "drop duck.cmt.id_name failed"
-uctl drop plain  id_name >/dev/null && ok "dropped duck.plain.id_name" || bad "drop duck.plain.id_name failed"
-docker exec "$CONTAINER" bin/uc table get --full_name duck.cmt.id_name >/dev/null 2>&1 \
-  && bad "duck.cmt.id_name still present after drop" || ok "duck.cmt.id_name gone after drop"
+uctl drop cmt id_name >/dev/null && ok "dropped duck.cmt.id_name" || bad "drop duck.cmt.id_name failed"
+uctl drop plain id_name >/dev/null && ok "dropped duck.plain.id_name" || bad "drop duck.plain.id_name failed"
+docker exec "$CONTAINER" bin/uc table get --full_name duck.cmt.id_name >/dev/null 2>&1 &&
+  bad "duck.cmt.id_name still present after drop" || ok "duck.cmt.id_name gone after drop"
 
 echo
 echo "smoke test: $pass passed, $fail failed"
