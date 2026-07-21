@@ -43,7 +43,9 @@ from ducktest.fixtures import (
     map_columns,
     resolve_seed,
 )
-from ducktest.provision import Bindings  # the FRAMEWORK Bindings (make_init_sql receives it)
+from ducktest.provision import (
+    Bindings,
+)  # the FRAMEWORK Bindings (make_init_sql receives it)
 from ducktest.provision import Provisioner as _BaseProvisioner
 
 # The databricks_gen library (atomic SQL primitives over the SDK) lives in scripts/.
@@ -404,9 +406,7 @@ class DatabricksProvisioner(_BaseProvisioner):
             external = "{location}" in f.read()
         location = self._s3_location(target) if external else None
         insert_path = os.path.join(_DATA_DIR, f"{table}.insert.sql")
-        state.plan.append(
-            f"[ro] provision {target} from {os.path.basename(def_path)}"
-        )
+        state.plan.append(f"[ro] provision {target} from {os.path.basename(def_path)}")
         if os.path.isfile(insert_path):
             state.plan.append(
                 f"    + DuckDB UC insert ({os.path.basename(insert_path)})"
