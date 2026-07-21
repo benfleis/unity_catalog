@@ -53,9 +53,7 @@ from ducktest.provision import Provisioner as _BaseProvisioner
 # `scripts` on sys.path so `import databricks_gen` resolves even when the --cli flow loads
 # this engine without the root conftest. databricks_gen imports the SDK lazily, so this
 # stays cheap -- test COLLECTION never pulls in databricks-sdk.
-_REPO_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
-)
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 _SCRIPTS_DIR = os.path.join(_REPO_ROOT, "scripts")
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
@@ -130,9 +128,7 @@ def _split_source(source_fqn: str):
     """catalog.schema.table -> (catalog, schema, table)."""
     parts = source_fqn.split(".")
     if len(parts) != 3:
-        raise ValueError(
-            f"@requires source must be catalog.schema.table, got {source_fqn!r}"
-        )
+        raise ValueError(f"@requires source must be catalog.schema.table, got {source_fqn!r}")
     return parts[0], parts[1], parts[2]
 
 
@@ -155,9 +151,7 @@ _CRED_VARS = (
     "DATABRICKS_REGION",
     "DATABRICKS_WAREHOUSE_ID",
 )
-_LAST_OP_ERROR = (
-    None  # op's error from the last _op_fetch (controller) -- for the hard-fail message
-)
+_LAST_OP_ERROR = None  # op's error from the last _op_fetch (controller) -- for the hard-fail message
 
 
 def have_core_creds():
@@ -188,9 +182,7 @@ def _require_creds():
     workers; the conftest hard-fails when they're unavailable. This is the --cli-path guard.
     """
     if not have_core_creds():
-        raise pytest.UsageError(
-            f"Databricks credentials unavailable ({cred_failure_detail()})."
-        )
+        raise pytest.UsageError(f"Databricks credentials unavailable ({cred_failure_detail()}).")
 
 
 def ensure_env(*, dry_run=False):
@@ -297,9 +289,7 @@ class DatabricksProvisioner(_BaseProvisioner):
                 "--repl on a databricks test needs @requires (no minimal-REPL path "
                 "wired for databricks). Add @requires, or pick an OSS test for a bare REPL."
             )
-        ensure_env(
-            dry_run=dry_run
-        )  # UC_TEST_CATALOG default + creds check (skipped on dry_run)
+        ensure_env(dry_run=dry_run)  # UC_TEST_CATALOG default + creds check (skipped on dry_run)
         self._refs = []
         self._cell_for_default = None
 
@@ -311,9 +301,7 @@ class DatabricksProvisioner(_BaseProvisioner):
 
     def rw_target(self, spec, token, state, dry_run):
         bare = spec.resolved_name()
-        cell = cell_schema_name(
-            spec.property("commit"), spec.property("storage"), token
-        )
+        cell = cell_schema_name(spec.property("commit"), spec.property("storage"), token)
         target = f"{state.catalog}.{cell}.{bare}"
         self.ensure_isolated(f"{state.catalog}.{cell}", state, dry_run)
         if self._cell_for_default is None:
@@ -370,19 +358,11 @@ class DatabricksProvisioner(_BaseProvisioner):
         """
         name = spec.source.name  # fixture logical name -- pure, no I/O
         cell_desc = f"{spec.property('commit') or 'plain'}/{spec.property('storage') or 'managed'}"
-        state.plan.append(
-            f"[{spec.access}] seed {target} from fixture {name!r} ({cell_desc})"
-        )
+        state.plan.append(f"[{spec.access}] seed {target} from fixture {name!r} ({cell_desc})")
         if dry_run:
             return
-        props = (
-            dict(CATALOG_MANAGED_PROPS) if spec.property("commit") == "cmt" else None
-        )
-        location = (
-            self._s3_location(target)
-            if spec.property("storage") == "external"
-            else None
-        )
+        props = dict(CATALOG_MANAGED_PROPS) if spec.property("commit") == "cmt" else None
+        location = self._s3_location(target) if spec.property("storage") == "external" else None
         definition = load_table_spec(spec.source, [_FIXTURES])
         tbl = canonicalize(self._duckdb_cli(), definition)
         cols = ", ".join(f"{n} {t}" for n, t in map_columns(tbl, DATABRICKS_TYPE_MAP))
@@ -408,9 +388,7 @@ class DatabricksProvisioner(_BaseProvisioner):
         insert_path = os.path.join(_DATA_DIR, f"{table}.insert.sql")
         state.plan.append(f"[ro] provision {target} from {os.path.basename(def_path)}")
         if os.path.isfile(insert_path):
-            state.plan.append(
-                f"    + DuckDB UC insert ({os.path.basename(insert_path)})"
-            )
+            state.plan.append(f"    + DuckDB UC insert ({os.path.basename(insert_path)})")
         if dry_run:
             return
         with step(f"provision {target} from {os.path.basename(def_path)}"):
@@ -435,13 +413,9 @@ class DatabricksProvisioner(_BaseProvisioner):
         duckdb_bin = find_duckdb(self._config, wd)
         with open(path) as f:
             sql = os.path.expandvars(f.read())
-        proc = subprocess.run(
-            [duckdb_bin, "-unsigned", "-c", sql], capture_output=True, text=True
-        )
+        proc = subprocess.run([duckdb_bin, "-unsigned", "-c", sql], capture_output=True, text=True)
         if proc.returncode != 0:
-            raise RuntimeError(
-                f"DuckDB UC insert failed ({os.path.basename(path)}):\n{proc.stderr.strip()}"
-            )
+            raise RuntimeError(f"DuckDB UC insert failed ({os.path.basename(path)}):\n{proc.stderr.strip()}")
 
     def execute(self, sql):
         """Route through databricks_gen's execute (the SDK transport) — used by the base
@@ -454,9 +428,7 @@ class DatabricksProvisioner(_BaseProvisioner):
         holds full namespaces (catalog.cell — see ensure_isolated in rw_target)."""
         namespaces = list(bindings.isolated) if bindings else []
         if not namespaces:
-            print(
-                f"teardown: nothing to drop for token={bindings.token if bindings else '?'}"
-            )
+            print(f"teardown: nothing to drop for token={bindings.token if bindings else '?'}")
             return
         for ns in namespaces:
             with step(f"drop cell schema {ns} CASCADE"):
@@ -477,30 +449,19 @@ class DatabricksProvisioner(_BaseProvisioner):
         state = bindings.backend
         if redact:
             # dry-run print: must not require a built binary.
-            build_dir = os.environ.get(
-                "BUILD_DIR", os.path.join(_REPO_ROOT, "build", "release")
-            )
+            build_dir = os.environ.get("BUILD_DIR", os.path.join(_REPO_ROOT, "build", "release"))
         else:
             wd = getattr(self._config, "sqllogic_working_dir", None) or os.getcwd()
             build_dir = os.path.dirname(find_duckdb(self._config, wd))
 
         def ext(name):
-            return os.path.join(
-                build_dir, "extension", name, f"{name}.duckdb_extension"
-            )
+            return os.path.join(build_dir, "extension", name, f"{name}.duckdb_extension")
 
-        token = (
-            "***REDACTED***"
-            if redact
-            else os.environ.get("DATABRICKS_TOKEN", "${DATABRICKS_TOKEN}")
-        )
+        token = "***REDACTED***" if redact else os.environ.get("DATABRICKS_TOKEN", "${DATABRICKS_TOKEN}")
         endpoint = os.environ.get("DATABRICKS_ENDPOINT", "${DATABRICKS_ENDPOINT}")
         region = os.environ.get("DATABRICKS_REGION", "${DATABRICKS_REGION}")
 
-        table_lines = "\n".join(
-            f".print '  {t.requirement_name}  ->  {t.fqn}  ({t.access})'"
-            for t in state.tables
-        )
+        table_lines = "\n".join(f".print '  {t.requirement_name}  ->  {t.fqn}  ({t.access})'" for t in state.tables)
 
         return f"""-- Auto-generated by uc.databricks.engine.make_init_sql for `duckdb -unsigned -init`.
 -- -unsigned (launch flag) is required to LOAD locally-built extensions.

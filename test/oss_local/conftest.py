@@ -26,9 +26,7 @@ def pytest_configure(config):
     the uc_server fixture + uctl.
     """
     register_provisioner(config, OssProvisioner(config), scope=_OSS_DIR)
-    config.addinivalue_line(
-        "markers", "oss_local: OSS-local UC tests (uc_server container)."
-    )
+    config.addinivalue_line("markers", "oss_local: OSS-local UC tests (uc_server container).")
 
 
 @pytest.fixture(autouse=True)

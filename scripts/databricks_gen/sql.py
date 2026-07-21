@@ -56,9 +56,7 @@ def _client():
 
     host, token = os.environ.get(_HOST_ENV), os.environ.get(_TOKEN_ENV)
     if not (host and token):
-        raise ValueError(
-            f"{_HOST_ENV} and {_TOKEN_ENV} must be set (workspace host + PAT)."
-        )
+        raise ValueError(f"{_HOST_ENV} and {_TOKEN_ENV} must be set (workspace host + PAT).")
     return WorkspaceClient(host=host, token=token)
 
 
@@ -72,9 +70,7 @@ def execute(sql, *, catalog=None, schema=None):
 
     warehouse = os.environ.get(_WAREHOUSE_ENV)
     if not warehouse:
-        raise ValueError(
-            f"{_WAREHOUSE_ENV} is not set (the SQL warehouse the statements run on)."
-        )
+        raise ValueError(f"{_WAREHOUSE_ENV} is not set (the SQL warehouse the statements run on).")
     w = _client()
     resp = w.statement_execution.execute_statement(
         warehouse_id=warehouse,
@@ -91,9 +87,7 @@ def execute(sql, *, catalog=None, schema=None):
         resp = w.statement_execution.get_statement(resp.statement_id)
     state = resp.status.state if resp.status else None
     if state != StatementState.SUCCEEDED:
-        detail = (
-            resp.status.error.message if (resp.status and resp.status.error) else state
-        )
+        detail = resp.status.error.message if (resp.status and resp.status.error) else state
         raise RuntimeError(f"Databricks SQL failed ({state}): {detail}\n  {sql}")
     rows = resp.result.data_array if resp.result else None
     return [tuple(r) for r in (rows or [])]
@@ -113,14 +107,10 @@ def _tblproperties(properties):
     return f"\n  TBLPROPERTIES ({items})"
 
 
-def build_create_table(
-    fqn, columns=None, *, as_select=None, properties=None, location=None, replace=True
-):
+def build_create_table(fqn, columns=None, *, as_select=None, properties=None, location=None, replace=True):
     """Build a CREATE [OR REPLACE] TABLE statement (exactly one of `columns` or `as_select`)."""
     if bool(columns) == bool(as_select):
-        raise ValueError(
-            "build_create_table needs exactly one of `columns` or `as_select`"
-        )
+        raise ValueError("build_create_table needs exactly one of `columns` or `as_select`")
     sql = f"{'CREATE OR REPLACE TABLE' if replace else 'CREATE TABLE IF NOT EXISTS'} {fqn}"
     if columns:
         sql += f" ({columns})"

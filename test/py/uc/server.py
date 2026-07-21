@@ -59,9 +59,7 @@ class UcServer:
 
 
 def _docker(*args, check=True):
-    return subprocess.run(
-        ["docker", *args], capture_output=True, text=True, check=check
-    )
+    return subprocess.run(["docker", *args], capture_output=True, text=True, check=check)
 
 
 def _wait_ready(timeout_s):
@@ -80,9 +78,7 @@ def _wait_ready(timeout_s):
             missing = [s for s in _SEED_SCHEMAS if s not in names]
             if not missing:
                 return
-            last = (
-                f"catalog up; schemas present={sorted(names)}, still missing={missing}"
-            )
+            last = f"catalog up; schemas present={sorted(names)}, still missing={missing}"
         except (
             urllib.error.URLError,
             OSError,
@@ -110,9 +106,7 @@ def start_container():
         "DUCKTEST_UC_PORT": str(PORT),
     }
     with step(f"starting OSS UC docker image ({IMAGE})"):
-        _docker(
-            "rm", "-f", CONTAINER, check=False
-        )  # ALWAYS_CREATE: force a fresh container
+        _docker("rm", "-f", CONTAINER, check=False)  # ALWAYS_CREATE: force a fresh container
         # `run` = the kit's single source of truth for the docker-run line (identical-path mount).
         # Suppress its stdout info-block so step() is the sole provisioning trace (the
         # --steps / --repl narration channel); stderr stays for failures.
@@ -122,9 +116,7 @@ def start_container():
             check=True,
             stdout=subprocess.DEVNULL,
         )
-        _wait_ready(
-            _READY_TIMEOUT_S
-        )  # waits until the seeded duck.cmt/plain schemas exist
+        _wait_ready(_READY_TIMEOUT_S)  # waits until the seeded duck.cmt/plain schemas exist
     return UcServer(endpoint=ENDPOINT, container=CONTAINER, data_dir=data_dir)
 
 
@@ -183,9 +175,7 @@ def _stop_service(config):
     stop_container(data_dir)
 
 
-OSS_SERVICE = service(
-    "oss-uc-server", start=_start_service, stop=_stop_service, fixture="uc_server"
-)
+OSS_SERVICE = service("oss-uc-server", start=_start_service, stop=_stop_service, fixture="uc_server")
 
 
 @pytest.fixture(scope="session")

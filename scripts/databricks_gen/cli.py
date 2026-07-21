@@ -48,9 +48,7 @@ def cmd_create(args):
     with open(args.source) as f:
         definition = parse_table_spec(f.read(), args.source)
     table = canonicalize(_duckdb_bin(), definition)
-    columns = ", ".join(
-        f"{name} {typ}" for name, typ in map_columns(table, DATABRICKS_TYPE_MAP)
-    )
+    columns = ", ".join(f"{name} {typ}" for name, typ in map_columns(table, DATABRICKS_TYPE_MAP))
     schema_fqn = args.fqn.rsplit(".", 1)[0]
 
     props = dict(CATALOG_MANAGED_PROPS) if args.commit == "cmt" else None
@@ -78,10 +76,7 @@ def cmd_drop(args):
 
 def cmd_drop_schema(args):
     _emit(
-        [
-            f"DROP SCHEMA IF EXISTS {args.schema}"
-            + ("" if args.no_cascade else " CASCADE")
-        ],
+        [f"DROP SCHEMA IF EXISTS {args.schema}" + ("" if args.no_cascade else " CASCADE")],
         args.dry_run,
     )
 
@@ -113,14 +108,10 @@ def cmd_from_sql(args):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(
-        prog="databricks-gen", description="Atomic Databricks table management."
-    )
+    p = argparse.ArgumentParser(prog="databricks-gen", description="Atomic Databricks table management.")
     sub = p.add_subparsers(dest="command", required=True)
 
-    c = sub.add_parser(
-        "create", help="instantiate a fixture (.sql shape+seed) as a Databricks table"
-    )
+    c = sub.add_parser("create", help="instantiate a fixture (.sql shape+seed) as a Databricks table")
     c.add_argument("fqn", help="destination catalog.schema.table")
     c.add_argument("--source", required=True, help="path to the fixture .sql")
     c.add_argument(

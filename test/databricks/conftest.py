@@ -19,9 +19,7 @@ _DBX_DIR = pathlib.Path(__file__).parent
 
 def pytest_configure(config):
     register_provisioner(config, DatabricksProvisioner(config), scope=str(_DBX_DIR))
-    config.addinivalue_line(
-        "markers", "databricks: live Databricks tests (require credentials)."
-    )
+    config.addinivalue_line("markers", "databricks: live Databricks tests (require credentials).")
 
 
 @pytest.hookimpl(tryfirst=True)
