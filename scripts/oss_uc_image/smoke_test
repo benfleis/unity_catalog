@@ -7,15 +7,15 @@
 #     <tmp>/duck/plain and does NOT carry it,
 # then tears everything down. Exit 0 = pass. Intended for CI.
 #
-# Env: FINAL_IMAGE (default ghcr.io/benfleis/ducktest-unitycatalog:local -- smokes the build you just made; set =...:ci to smoke the published image), UC_DUCK_PORT (default 8088).
+# Env: FINAL_IMAGE (default ghcr.io/benfleis/ducktest-unitycatalog:local -- smokes the build you just made; set =...:ci to smoke the published image), DUCKTEST_UC_PORT (default 8088).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IMAGE="${FINAL_IMAGE:-ghcr.io/benfleis/ducktest-unitycatalog:local}"
-PORT="${UC_DUCK_PORT:-8088}"
-CONTAINER="uc-duck-smoke-$$"
-TMPDIR_DATA="$(mktemp -d -t uc-duck-smoke-XXXXXX)"
-export UC_DUCK_CONTAINER="$CONTAINER"
+PORT="${DUCKTEST_UC_PORT:-8088}"
+CONTAINER="ducktest-uc-smoke-$$"
+TMPDIR_DATA="$(mktemp -d -t ducktest-uc-smoke-XXXXXX)"
+export DUCKTEST_UC_CONTAINER="$CONTAINER"
 
 pass=0
 fail=0
@@ -44,7 +44,7 @@ trap cleanup EXIT
 
 echo ">> starting $CONTAINER (image $IMAGE, data $TMPDIR_DATA)"
 docker run -d --user "$(id -u):2008" --name "$CONTAINER" -p "$PORT:8080" \
-  -v "$TMPDIR_DATA:$TMPDIR_DATA" -e "UC_DUCK_DATA_DIR=$TMPDIR_DATA" "$IMAGE" >/dev/null
+  -v "$TMPDIR_DATA:$TMPDIR_DATA" -e "DUCKTEST_UC_DATA_DIR=$TMPDIR_DATA" "$IMAGE" >/dev/null
 
 echo ">> waiting for seed (duck.cmt + duck.plain)..."
 ready=

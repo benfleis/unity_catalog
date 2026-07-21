@@ -1,39 +1,43 @@
 PROJ_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
-# Configuration of extension
+# Extension config.
 EXT_NAME=unity_catalog
 EXT_CONFIG=${PROJ_DIR}extension_config.cmake
-
-# Core extensions that we need for crucial testing
 DEFAULT_TEST_EXTENSION_DEPS=parquet;httpfs;tpch;tpcds
 
-# uv should work if created as suggested in venv: below, but allow overrides
-PYTHON_PIP=venv/bin/python3 -m pip
-PYTHON_BIN=venv/bin/python3
+# Defaults default to the uv-built .venv (see `make venv`); override any on the CLI.
+UV      ?= uv
+VENV    ?= .venv
+PYTEST  ?= $(VENV)/bin/python -m pytest
+export DUCKTEST_UC_IMAGE ?= ghcr.io/benfleis/ducktest-unitycatalog:local
+UC_REPO ?= $(HOME)/src/d/unitycatalog
+ENV_DATABRICKS_CMD ?= scripts/env_databricks   # injects DATABRICKS_* creds -- read the script to hack at it
 
-ENV_DATABRICKS_CMD ?= scripts/run_databricks_env
-
-# Include the Makefile from extension-ci-tools (build targets: release/debug/…)
+# Build targets (release/debug/…).
 include extension-ci-tools/makefiles/duckdb_extension.Makefile
 
+# Test venv from pyproject: uv sync installs the dev group (driver[xdist] + databricks-sdk); the driver's
+# pytest11 entry point registers the plugin. No `venv` symlink -- it's `.venv` all the way down.
+.PHONY: venv
 venv:
-	# The whole test venv is declared in pyproject.toml (the driver[xdist] editable from ../driver, plus
-	# databricks-sdk); pytest config lives next door in pytest.ini. `uv sync` builds it from that one
-	# manifest — no more separate editable-driver install + scripts/databricks_gen/requirements.txt.
-	# Requires Python 3.12-3.14 (pinned in pyproject's requires-python). Then: `uv run pytest`.
-	uv sync
-	ln -sfn .venv venv
+	$(UV) sync
 
-# The suite is pytest-driven (duckdb-pytest-driver): pytest collects the .test files and runs
-# them through the unittest binary WITH provisioning (@requires fixtures, catalog setup, managed
-# teardown). Point extension-ci-tools' test chain (test -> test_release -> test_release_internal)
-# at pytest instead of its raw binary run, which would bypass the provisioner. So `make test` ==
-# pytest; needs a built $(BUILD_DIR). OSS runs against the ducktest container; databricks skips
-# without creds -- use `make test_databricks` (wraps run_databricks_env). (Make warns once about
-# overriding test_release_internal -- expected.)
+# `make test` == default oss_local suite (smoke); hooks the ci-tools chain so the extension builds first.
 test_release_internal:
-	${PYTHON_BIN} -m pytest test
+	$(PYTEST) test/oss_local
+
+# `make test_all` == oss_local + the creds-gated databricks suite.
+.PHONY: test_all
+test_all: test test_databricks
 
 .PHONY: test_databricks
 test_databricks:
-	${ENV_DATABRICKS_CMD} ${PYTHON_BIN} -m pytest test/databricks
+	$(ENV_DATABRICKS_CMD) $(PYTEST) test/databricks
+
+# `make publish_image` == the 3-step promote in scripts/oss_uc_image/README.md (docker login ghcr first).
+.PHONY: publish_image
+publish_image:
+	@test -f "$(UC_REPO)/build.sbt" || { echo "set UC_REPO=/path/to/unitycatalog (no build.sbt at '$(UC_REPO)')" >&2; exit 1; }
+	UC_REPO="$(UC_REPO)" scripts/oss_uc_image/build_image --push
+	scripts/oss_uc_image/smoke_test
+	UC_REPO="$(UC_REPO)" scripts/oss_uc_image/build_image --merge --alias ci

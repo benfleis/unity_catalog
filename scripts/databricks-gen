@@ -2,7 +2,7 @@
 """Executable shim for the `databricks-gen` CLI (see databricks_gen/cli.py).
 
 Run under the project venv (deps: databricks-sdk, duckdb-pytest-driver), e.g.
-`scripts/run_databricks_env scripts/databricks-gen create …`.
+`scripts/env_databricks scripts/databricks-gen create …`.
 """
 
 import os

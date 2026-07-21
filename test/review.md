@@ -109,7 +109,7 @@ it as the highest-value next step rather than guessing at it blind.
 ### Confirmed gap: no `pytest.ini` / `duck-test configure` at the repo root
 
 Grepped the whole repo (working tree + git history): there is no `pytest.ini` anywhere,
-`duck-test configure` is not called from the `Makefile`, `scripts/run_databricks_env`, or
+`duck-test configure` is not called from the `Makefile`, `scripts/env_databricks`, or
 any `.github/workflows/*.yml`, and there is no root `conftest.py` either — only the two
 subtree ones. `Makefile`'s `test_release_internal` target runs a bare
 `${PYTHON_BIN} -m pytest test`.
@@ -161,7 +161,7 @@ of which this repo is currently also running without).
   invocation with no override would have tried to run a nonexistent local image. Fixed the
   default (and its usage-comment) to match.
 
-- **`scripts/run_databricks_env`: dead `UC_TEST_SCHEMA` export.** Set
+- **`scripts/env_databricks`: dead `UC_TEST_SCHEMA` export.** Set
   `UC_TEST_SCHEMA="test_schema_$schema_rand"`, but nothing in `test/py/uc/databricks/`
   reads `UC_TEST_SCHEMA` anymore — grepped `engine.py`/`config.py`, no hits.
   `WIP-identity-design.md`'s implementation checklist confirms the Databricks provisioner

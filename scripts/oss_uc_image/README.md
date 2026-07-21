@@ -42,7 +42,7 @@ to `$UC_REF` — default `v0.5.1` — before building) preconfigured for dev and
 ./uctl list cmt
 ./uctl drop cmt id_name
 
-docker stop uc-duck
+docker stop ducktest-uc
 ```
 
 ## Image naming
@@ -87,7 +87,7 @@ scripts/oss_uc_image/build_image --merge --alias ci                    # promote
 - `--push` publishes the arch-suffixed `:<tag>-<arch>`; `--merge` assembles the canonical multi-arch
   `:<tag>` from whatever arch slices exist; `--alias ci` moves a stable **`:ci`** tag onto it.
 - **`:ci` is what consumers pull.** `server.py` defaults to it and CI's `Ducktest.yml` sets
-  `UC_DUCK_IMAGE=…:ci` explicitly; the `build_image`/`run`/`smoke_test` toolkit works on `:local`.
+  `DUCKTEST_UC_IMAGE=…:ci` explicitly; the `build_image`/`run`/`smoke_test` toolkit works on `:local`.
   The `--merge --alias ci` above is the promotion — run it only after `smoke_test` passes.
 - **Multi-arch:** build each arch natively where it's cheap and re-merge — e.g. amd64 in CI, arm64 from a
   Mac (`build_image --push` there), then `build_image --merge --alias ci` picks up both. No QEMU.
@@ -126,13 +126,13 @@ end-to-end via Delta Kernel (no Spark needed), so both are genuine Delta tables.
 UC records **absolute** `file://` locations for tables. A client can only open
 them if that path resolves in its own filesystem namespace — so `run.sh` bind-mounts
 the data dir at the **same absolute path** on host and container (`-v $DIR:$DIR`)
-and sets `UC_DUCK_DATA_DIR=$DIR`. A host client (e.g. the duckdb `unittest` binary)
+and sets `DUCKTEST_UC_DATA_DIR=$DIR`. A host client (e.g. the duckdb `unittest` binary)
 then resolves `file://$DIR/...` to the same files the container wrote. (Mounting to a
 *different* container path like `/home/unitycatalog/etc/data` breaks host clients:
 UC hands back `/home/unitycatalog/...`, which doesn't exist on the host.)
 
 ```
-$UC_DUCK_DATA_DIR/                    # same path on host and in the container
+$DUCKTEST_UC_DATA_DIR/                    # same path on host and in the container
   duck/
     cmt/                              # storage_root of schema duck.cmt
       __unitystorage/schemas/<schema-uuid>/tables/<table-uuid>/_delta_log + parquet
@@ -140,13 +140,13 @@ $UC_DUCK_DATA_DIR/                    # same path on host and in the container
       <table>/_delta_log + parquet
 ```
 
-- `duck.cmt` has `storage_root = $UC_DUCK_DATA_DIR/duck/cmt`, so UC nests its
+- `duck.cmt` has `storage_root = $DUCKTEST_UC_DATA_DIR/duck/cmt`, so UC nests its
   `__unitystorage` tree (and every cmt table) under it.
 - `duck.plain` has **no** storage_root; `uctl` gives each plain table a location
-  at `$UC_DUCK_DATA_DIR/duck/plain/<table>` (read from the container's env). Because
+  at `$DUCKTEST_UC_DATA_DIR/duck/plain/<table>` (read from the container's env). Because
   that is a **sibling** of `duck/cmt` (neither under nor above cmt storage),
   UC's overlap check passes and **no external location needs to be registered**.
-- `UC_DUCK_DATA_DIR` defaults to `/home/unitycatalog/etc/data` (fine for an
+- `DUCKTEST_UC_DATA_DIR` defaults to `/home/unitycatalog/etc/data` (fine for an
   in-container client); `run.sh` overrides it to the identical-path host dir.
 - The H2 metastore lives at `etc/db` (NOT under the data mount), so it is fresh per
   container — see CI usage.
@@ -168,7 +168,7 @@ or drive it yourself:
 tmp=$(mktemp -d)
 ./run "$tmp"
 # ... exercise via ./uctl or the REST API at http://localhost:8080 ...
-docker stop uc-duck        # --rm cleans the container; rm -rf "$tmp" when done
+docker stop ducktest-uc        # --rm cleans the container; rm -rf "$tmp" when done
 ```
 
 ## Why `Dockerfile.base` (the COURSIER_CACHE fix)
@@ -197,8 +197,8 @@ pieces ride along regardless:
   picked up by S3A.
 
 To point the CLI's S3A writer at an S3-compatible store (e.g. MinIO), set at
-`docker run`: **`UC_DUCK_S3_ENDPOINT`** (+ optional `UC_DUCK_S3_REGION`,
-`UC_DUCK_S3_KEY`, `UC_DUCK_S3_SECRET`, `UC_DUCK_S3_SSL`). The entrypoint then writes
+`docker run`: **`DUCKTEST_UC_S3_ENDPOINT`** (+ optional `DUCKTEST_UC_S3_REGION`,
+`DUCKTEST_UC_S3_KEY`, `DUCKTEST_UC_S3_SECRET`, `DUCKTEST_UC_S3_SSL`). The entrypoint then writes
 `core-site.xml`; unset → no file → **AWS default endpoint / local FS** untouched.
 
 Caveats (from the spike — see project notes):
@@ -212,7 +212,7 @@ Caveats (from the spike — see project notes):
 ## Notes / knobs
 
 - Data dir is bind-mounted host==container (`-v $DIR:$DIR`) and the server is told
-  where via `UC_DUCK_DATA_DIR`; `./run <hostdir>` sets both. Pick `<hostdir>` in a
+  where via `DUCKTEST_UC_DATA_DIR`; `./run <hostdir>` sets both. Pick `<hostdir>` in a
   Docker-shareable location (a temp dir under `/var/folders`, `/tmp`, or `/Users`
   works on macOS). Default when unset: `/home/unitycatalog/etc/data` (in-container
   clients only).
@@ -223,7 +223,7 @@ Caveats (from the spike — see project notes):
   / `--uc-ref` (default `v0.5.1`, from `UC_REMOTE`, default `origin`); pass
   `--no-switch` to build the current HEAD as-is. It un-applies its own `patches/`
   before switching, but *unrelated* uncommitted changes make it bail — commit/stash first.
-- Env overrides: `UC_REPO`, `UC_REF`, `UC_REMOTE`, `UC_DUCK_CONTAINER`, `UC_DUCK_PORT`,
+- Env overrides: `UC_REPO`, `UC_REF`, `UC_REMOTE`, `DUCKTEST_UC_CONTAINER`, `DUCKTEST_UC_PORT`,
   `FINAL_IMAGE`, `BASE_IMAGE`, `STABLE_ALIAS`.
 - Baking the catalog/schema into the image at build time (instead of seeding at
   startup) is possible later if startup seeding proves too slow; startup seeding is

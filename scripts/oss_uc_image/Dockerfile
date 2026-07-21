@@ -10,10 +10,10 @@ USER root
 
 # Duck-only server config + seeding entrypoint.
 COPY server.properties /home/unitycatalog/etc/conf/server.properties
-COPY entrypoint.sh     /home/unitycatalog/bin/duck-entrypoint.sh
+COPY entrypoint.sh     /home/unitycatalog/bin/ducktest-entrypoint.sh
 
 RUN set -eux; \
-    chmod 0755 /home/unitycatalog/bin/duck-entrypoint.sh; \
+    chmod 0755 /home/unitycatalog/bin/ducktest-entrypoint.sh; \
     # Let the entrypoint add a passwd entry for an arbitrary --user uid (delta-kernel needs a
     # resolvable effective user): make /etc/passwd writable by the unitycatalog gid (2008 = the run gid).
     chgrp unitycatalog /etc/passwd; chmod g+w /etc/passwd; \
@@ -24,7 +24,7 @@ RUN set -eux; \
     rm -rf /home/unitycatalog/etc/data/managed /home/unitycatalog/etc/data/external; \
     mkdir -p /home/unitycatalog/etc/data/duck/cmt /home/unitycatalog/etc/data/duck/plain; \
     # S3-readiness: put a conf dir on the CLI + server classpath so a core-site.xml
-    # the entrypoint generates at runtime (only when UC_DUCK_S3_ENDPOINT is set,
+    # the entrypoint generates at runtime (only when DUCKTEST_UC_S3_ENDPOINT is set,
     # e.g. MinIO) is loaded by the S3A writer. Dormant for local FS and AWS S3 (no file
     # written -> default endpoint).
     mkdir -p /home/unitycatalog/conf; \
@@ -38,4 +38,4 @@ USER unitycatalog
 WORKDIR /home/unitycatalog
 
 EXPOSE 8080
-ENTRYPOINT ["./bin/duck-entrypoint.sh"]
+ENTRYPOINT ["./bin/ducktest-entrypoint.sh"]

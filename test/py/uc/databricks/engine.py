@@ -106,7 +106,7 @@ def _expand(s: str) -> str:
         raise pytest.UsageError(
             f"--cli: unresolved environment variable in @requires source {s!r} "
             f"(expanded to {out!r}). Set it in the environment "
-            "(e.g. UC_TEST_CATALOG, or run under run_databricks_env)."
+            "(e.g. UC_TEST_CATALOG, or run under env_databricks)."
         )
     return out
 
@@ -114,7 +114,7 @@ def _expand(s: str) -> str:
 def _default_catalog_env():
     """Default the neutral UC_TEST_CATALOG so `--cli` works without a wrapper.
 
-    Honors an explicit UC_TEST_CATALOG (set by you, run_databricks_env, or CI);
+    Honors an explicit UC_TEST_CATALOG (set by you, env_databricks, or CI);
     else falls back to the standard write-test catalog. Override by exporting
     UC_TEST_CATALOG.
     """

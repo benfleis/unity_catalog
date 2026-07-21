@@ -16,18 +16,18 @@
 #   ./uctl list   <schema>
 #   ./uctl uc     <raw uc args...>          # escape hatch
 #
-# <schema> is cmt or plain. Env: UC_DUCK_CONTAINER (default uc-duck).
+# <schema> is cmt or plain. Env: DUCKTEST_UC_CONTAINER (default ducktest-uc).
 set -euo pipefail
 
-CONTAINER="${UC_DUCK_CONTAINER:-uc-duck}"
+CONTAINER="${DUCKTEST_UC_CONTAINER:-ducktest-uc}"
 
 dexec() { docker exec "$CONTAINER" bin/uc "$@"; }
 
-# Data root the server is actually using (run.sh sets UC_DUCK_DATA_DIR to a path
+# Data root the server is actually using (run.sh sets DUCKTEST_UC_DATA_DIR to a path
 # mounted identically on host+container; default matches entrypoint's fallback).
 # EXTERNAL tables get an explicit location under it, sibling of duck/cmt.
 data_root() {
-  local d; d="$(docker exec "$CONTAINER" printenv UC_DUCK_DATA_DIR 2>/dev/null || true)"
+  local d; d="$(docker exec "$CONTAINER" printenv DUCKTEST_UC_DATA_DIR 2>/dev/null || true)"
   printf '%s' "${d:-/home/unitycatalog/etc/data}"
 }
 

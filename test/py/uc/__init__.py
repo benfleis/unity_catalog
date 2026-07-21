@@ -22,7 +22,7 @@ UCTL = os.environ.get("UC_UCTL", str(SCRIPTS_DIR / "uctl"))
 def uctl(*args, check=True):
     """Run the image kit's `uctl <args>` (wraps `docker exec <container> bin/uc ...`).
 
-    Container name via UC_DUCK_CONTAINER (uctl reads it); the `uc_server` fixture
+    Container name via DUCKTEST_UC_CONTAINER (uctl reads it); the `uc_server` fixture
     starts that container. Surfaces stdout/stderr on failure. Examples:
 
         uctl("create", "managed", "id_name", "id INT, name STRING")

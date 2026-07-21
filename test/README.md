@@ -13,7 +13,7 @@ stays the central artifact; the Python is thin glue.
   published from [`scripts/oss_uc_image/`](../scripts/oss_uc_image/README.md) — see that README for the
   build + publish process.
 - **`databricks/`** — run against a **live Databricks workspace** (creds via
-  `scripts/run_databricks_env` → `DATABRICKS_*` + `DATABRICKS_WAREHOUSE_ID`). Not in CI; tests skip
+  `scripts/env_databricks` → `DATABRICKS_*` + `DATABRICKS_WAREHOUSE_ID`). Not in CI; tests skip
   gracefully without creds. Read tables auto-provision from the Delta-artifact defs in
   `databricks/data/`; write tests seed the `id_name` fixture into an isolated cell and tear it down.
 - **`fixtures/`** — neutral, backend-agnostic table fixtures (e.g. `id_name`), instantiated per
@@ -26,7 +26,7 @@ stays the central artifact; the Python is thin glue.
 
 ```bash
 make test                                  # pytest over test/ (OSS runs; databricks skips w/o creds)
-run_databricks_env pytest test/databricks  # the databricks suite, with creds
+env_databricks pytest test/databricks  # the databricks suite, with creds
 pytest -m oss_local                        # just the OSS subtree
 ```
 

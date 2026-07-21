@@ -1,7 +1,7 @@
 """Databricks account configuration for the UC test suite.
 
 Env-overridable defaults for the specific Databricks workspace the tests target -- the
-databricks counterpart of server.py's `UC_DUCK_*` block. Keep account-specific values HERE
+databricks counterpart of server.py's `DUCKTEST_UC_*` block. Keep account-specific values HERE
 (not scattered through the provisioner and tests) so pointing the suite at a different
 workspace is a one-file change, or a set of env overrides.
 

@@ -108,7 +108,7 @@ stamp `2026-06-23T08-48-12Z--brave-otter`; extend the scheme to provisioned sche
 ## Env translation (slice 0) 🔨
 
 External `DATABRICKS_UC_*` (env-script overrides) → internal short vars injected on both backends.
-`run_databricks_env` catalog exports become commented `# export DATABRICKS_UC_*` override
+`env_databricks` catalog exports become commented `# export DATABRICKS_UC_*` override
 templates (pytest supplies defaults via config.py). Internal contract = the short `CATALOG`/
 `SCHEMA`/`TABLE` + aliases.
 
@@ -165,10 +165,10 @@ creds #2. Exported from `driver`; offline self-test `tests/test_broadcast.py` (2
 `engine.load_creds` (env-wins **per var**, `op` fills only gaps — a partial override like a personal
 TOKEN survives; complete env → no op; op-unavailable partial → skip) + `_op_fetch`; `test/databricks/conftest.py`
 `register_broadcast(..., load_creds)` + `os.environ.update(get_broadcast(...))`. Stale PYTEST.md refs
-removed. **Verify live:** `run_databricks_env pytest test/databricks` (env path, no `op`) AND bare
+removed. **Verify live:** `env_databricks pytest test/databricks` (env path, no `op`) AND bare
 `pytest test/databricks` (controller `op`-fetch once → broadcast). Two-repo change (driver + uc).
 Design that got us here:
-- Supersedes the prior decision (front-load via `run_databricks_env`, "never fetch in-process — wrong
+- Supersedes the prior decision (front-load via `env_databricks`, "never fetch in-process — wrong
   under xdist"). That was right about *per-worker* `op`; the fix is **controller-fetch-once +
   broadcast** — the in-process pattern the old decision lacked. (Stale `PYTEST.md` ref in
   `test/databricks/conftest.py` + `engine.py` to remove.)
@@ -183,7 +183,7 @@ Design that got us here:
   The driver plugin's `configure_node` **always** fires (that's why run-id broadcast lives there). So
   build a **generic broadcast seam in the driver** ("controller computes once → broadcast to
   workers"): run-id is consumer #1, creds #2 (justifies generalizing). UC supplies only the op-fetch.
-  Makes bare `pytest test/databricks` wrapper-free; `run_databricks_env` op-exports become optional
+  Makes bare `pytest test/databricks` wrapper-free; `env_databricks` op-exports become optional
   overrides (ties to step 6 env translation).
 
 This is the concrete form of the `Backend`/`Service` layer in step B: **invocation-scoped + shared**;
@@ -255,7 +255,7 @@ batched invocation.
    from `engine.py`** (DB fully ported); py docstrings refreshed. `oss.py` **keeps** legacy
    `UC_TEST_*` (OSS bodies not yet migrated — gated on the step-2 container work). `conftest.py`
    `UC_TEST_CATALOG` note = the provisioner *input* var (step-6 env translation), correctly retained.
-6. Env translation (`DATABRICKS_UC_*` → short internals; comment `run_databricks_env` exports).
+6. Env translation (`DATABRICKS_UC_*` → short internals; comment `env_databricks` exports).
 7. `READ_ONLY` from access; OSS endpoint from env; collapse OSS double-injection.
 8. `teardown_stale(older_than)` + `duck-test clean --older-than 30d`.
 

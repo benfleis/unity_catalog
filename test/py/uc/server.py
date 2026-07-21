@@ -33,12 +33,12 @@ from uc import SCRIPTS_DIR
 # Fixed name/port (by-lifecycle isolation). A host client resolves the server's absolute
 # file:// table paths only if the bind-mount path matches, which the kit `run` script
 # guarantees (identical host==container data dir); hence we provision via `run`.
-CONTAINER = os.environ.get("UC_DUCK_CONTAINER", "uc-duck")
-PORT = int(os.environ.get("UC_DUCK_PORT", "8080"))
+CONTAINER = os.environ.get("DUCKTEST_UC_CONTAINER", "ducktest-uc")
+PORT = int(os.environ.get("DUCKTEST_UC_PORT", "8080"))
 # `:ci` is the published multi-arch tag CI and local runs both use by default; iterating on the
 # image ITSELF (scripts/oss_uc_image/build_image tags `:local` locally) means overriding
-# UC_DUCK_IMAGE back to `:local`.
-IMAGE = os.environ.get("UC_DUCK_IMAGE", "ghcr.io/benfleis/ducktest-unitycatalog:ci")
+# DUCKTEST_UC_IMAGE back to `:local`.
+IMAGE = os.environ.get("DUCKTEST_UC_IMAGE", "ghcr.io/benfleis/ducktest-unitycatalog:ci")
 ENDPOINT = f"http://127.0.0.1:{PORT}"
 
 _CATALOG = "duck"
@@ -46,7 +46,7 @@ _SEED_SCHEMAS = ("cmt", "plain")  # entrypoint seeds these after the catalog
 _READY_URL = f"{ENDPOINT}/api/2.1/unity-catalog/schemas?catalog_name={_CATALOG}"
 # A healthy boot+seed is a few seconds; 45s is a generous ceiling that still FAILS FAST instead of
 # masking a hang (a wedged boot under the start-lock blocks every OSS worker). Override if needed.
-_READY_TIMEOUT_S = int(os.environ.get("UC_DUCK_READY_TIMEOUT_S", "45"))
+_READY_TIMEOUT_S = int(os.environ.get("DUCKTEST_UC_READY_TIMEOUT_S", "45"))
 
 
 @dataclass(frozen=True)
@@ -102,12 +102,12 @@ def start_container():
     Shared by the `uc_server` fixture (run path) and OssProvisioner (--repl, which runs
     no fixtures so the provisioner owns the container).
     """
-    data_dir = tempfile.mkdtemp(prefix="uc-duck-data-")
+    data_dir = tempfile.mkdtemp(prefix="ducktest-uc-data-")
     env = {
         **os.environ,
         "FINAL_IMAGE": IMAGE,
-        "UC_DUCK_CONTAINER": CONTAINER,
-        "UC_DUCK_PORT": str(PORT),
+        "DUCKTEST_UC_CONTAINER": CONTAINER,
+        "DUCKTEST_UC_PORT": str(PORT),
     }
     with step(f"starting OSS UC docker image ({IMAGE})"):
         _docker(
