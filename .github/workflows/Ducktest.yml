@@ -150,6 +150,7 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
+          cache-dependency-glob: main/pyproject.toml # TODO: replace with uv.lock once stable
 
       # The OSS suite boots $DUCKTEST_UC_IMAGE (test/py/uc/server.py). It's the multi-arch :ci alias published
       # by publish-uc-image.yml; warm the cache here so a missing/unpullable image fails fast and loud
@@ -158,8 +159,8 @@ jobs:
         run: docker pull "$DUCKTEST_UC_IMAGE"
 
       - name: OSS-local suite (default `oss_local`; boots the UC container)
-        # -n0 -s: serial + unbuffered so container/seed output streams live (xdist buffers it).
-        # Bare selection == the default suite; no -m needed. uv resolves the driver from ../driver.
+        # paranoid output: -n0 -s: serial + unbuffered so output streams perfect
+        # If this gets slow, drop args; worst case is some worker logs get interspersed.
         run: uv run pytest -n0 -s
 
   # ---------------------------------------------------------------------------
