@@ -194,7 +194,7 @@ pieces ride along regardless:
   in the CLI's Delta writer (`DeltaKernelUtils.getHDFSConfiguration`) so a `s3://`
   **EXTERNAL** table doesn't NPE when UC vends no creds. Harmless for local FS/AWS.
 - A **conf dir on the classpath**, so a `core-site.xml` the entrypoint can write is
-  picked up by Hadoop S3A.
+  picked up by S3A.
 
 To point the CLI's S3A writer at an S3-compatible store (e.g. MinIO), set at
 `docker run`: **`UC_DUCK_S3_ENDPOINT`** (+ optional `UC_DUCK_S3_REGION`,

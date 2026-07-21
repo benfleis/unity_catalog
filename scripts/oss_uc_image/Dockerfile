@@ -14,6 +14,9 @@ COPY entrypoint.sh     /home/unitycatalog/bin/duck-entrypoint.sh
 
 RUN set -eux; \
     chmod 0755 /home/unitycatalog/bin/duck-entrypoint.sh; \
+    # Let the entrypoint add a passwd entry for an arbitrary --user uid (delta-kernel needs a
+    # resolvable effective user): make /etc/passwd writable by the unitycatalog gid (2008 = the run gid).
+    chgrp unitycatalog /etc/passwd; chmod g+w /etc/passwd; \
     # Start from an empty metastore: drop the bundled H2 db (the sample
     # `unity` catalog) so the image is duck-only and seeds deterministically.
     rm -f /home/unitycatalog/etc/db/h2db*.db; \
@@ -22,7 +25,7 @@ RUN set -eux; \
     mkdir -p /home/unitycatalog/etc/data/duck/cmt /home/unitycatalog/etc/data/duck/plain; \
     # S3-readiness: put a conf dir on the CLI + server classpath so a core-site.xml
     # the entrypoint generates at runtime (only when UC_DUCK_S3_ENDPOINT is set,
-    # e.g. MinIO) is loaded by Hadoop S3A. Dormant for local FS and AWS S3 (no file
+    # e.g. MinIO) is loaded by the S3A writer. Dormant for local FS and AWS S3 (no file
     # written -> default endpoint).
     mkdir -p /home/unitycatalog/conf; \
     for cp in /home/unitycatalog/examples/cli/target/classpath /home/unitycatalog/server/target/classpath; do \

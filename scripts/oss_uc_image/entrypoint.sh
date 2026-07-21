@@ -28,10 +28,19 @@ PLAIN_ROOT="$DUCK_DIR/plain"
 
 cd "$UC_HOME"
 
+# We're usually run with `--user $(id -u):2008` (see run/README) so bind-mounted files are owned by the
+# invoking HOST uid. That uid typically has no /etc/passwd entry, which makes the JVM inside
+# delta-kernel die with "Invalid UID, could not determine effective user". Give it a name so getpwuid()
+# resolves (/etc/passwd is group-writable by our gid -- see Dockerfile). No-op when run as the named user.
+_uid="$(id -u)"
+if ! awk -F: -v u="$_uid" '$3==u{f=1} END{exit !f}' /etc/passwd; then
+	echo "duck:x:${_uid}:$(id -g):duck:${UC_HOME}:/sbin/nologin" >>/etc/passwd
+fi
+
 # 1. Layout. The bind mount may shadow the image's dirs with an empty host dir.
 mkdir -p "$CMT_ROOT" "$PLAIN_ROOT"
 
-# 1b. Optional S3-compatible (e.g. MinIO) endpoint for the CLI's Hadoop S3A writer.
+# 1b. Optional S3-compatible (e.g. MinIO) endpoint for the CLI's S3A writer.
 # Only when UC_DUCK_S3_ENDPOINT is set do we write a core-site.xml (the conf dir is
 # already on the classpath from the image build). Unset => local FS / AWS S3 with
 # the default endpoint. Static keys here cover EXTERNAL tables (no UC vending);
