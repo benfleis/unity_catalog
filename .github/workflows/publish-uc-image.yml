@@ -26,10 +26,10 @@ permissions:
 
 env:
   IMAGE_NS: ghcr.io/benfleis
-  # unitycatalog SOURCE for the base image (sbt build). PINNED for reproducible base tags (the tag stems
-  # from this checkout's version.sbt + 7-char sha). Bump deliberately, or override per-dispatch via input.
   UC_SOURCE_REPO: unitycatalog/unitycatalog
-  UC_REF: v0.5.1
+  # The UC source ref is PINNED in scripts/oss_uc_image/build_image (single source of truth). This only
+  # forwards a dispatch-time override; empty falls through to build_image's default.
+  UC_REF: ${{ github.event.inputs.uc_ref }}
   PUBLISH_ALIAS: ci
 
 jobs:
@@ -41,11 +41,10 @@ jobs:
     steps:
       - name: Checkout this repo (build scripts) at repo root
         uses: actions/checkout@v4
-      - name: Checkout unitycatalog source at uc-src/
+      - name: Checkout unitycatalog source at uc-src/ (build_image fetches+switches it to UC_REF)
         uses: actions/checkout@v4
         with:
           repository: ${{ env.UC_SOURCE_REPO }}
-          ref: ${{ github.event.inputs.uc_ref || env.UC_REF }}
           path: uc-src
       - name: Log in to ghcr
         # GHCR_PAT: a classic PAT with write:packages owned by benfleis (the ghcr.io/benfleis namespace).

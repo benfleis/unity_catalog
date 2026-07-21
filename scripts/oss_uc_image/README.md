@@ -1,8 +1,8 @@
 # unitycatalog "duck" test image
 
 A Docker image of Unity Catalog (built from a UC source checkout located via
-`$UC_REPO`, default `~/src/d/unitycatalog`, currently `main` / 0.5 lineage)
-preconfigured for dev and CI:
+`$UC_REPO`, default `~/src/d/unitycatalog`, which `build_image` fetches + switches
+to `$UC_REF` — default `v0.5.1` — before building) preconfigured for dev and CI:
 
 - managed tables enabled, auth disabled, **local filesystem only** (no cloud creds);
 - one catalog **`duck`** with two schemas:
@@ -214,9 +214,12 @@ Caveats (from the spike — see project notes):
 - `build --rebuild-base` forces a fresh source build; otherwise the base image is
   reused once built (it is keyed to the checkout's git ref, so a new commit rebuilds).
 - UC source checkout: `UC_REPO=/path` or `--uc-repo /path` (default
-  `~/src/d/unitycatalog`).
-- Env overrides: `UC_REPO`, `UC_DUCK_CONTAINER`, `UC_DUCK_PORT`, `FINAL_IMAGE`,
-  `BASE_IMAGE`, `STABLE_ALIAS`.
+  `~/src/d/unitycatalog`). `build_image` fetches + switches it (detached) to `UC_REF`
+  / `--uc-ref` (default `v0.5.1`, from `UC_REMOTE`, default `origin`); pass
+  `--no-switch` to build the current HEAD as-is. It un-applies its own `patches/`
+  before switching, but *unrelated* uncommitted changes make it bail — commit/stash first.
+- Env overrides: `UC_REPO`, `UC_REF`, `UC_REMOTE`, `UC_DUCK_CONTAINER`, `UC_DUCK_PORT`,
+  `FINAL_IMAGE`, `BASE_IMAGE`, `STABLE_ALIAS`.
 - Baking the catalog/schema into the image at build time (instead of seeding at
   startup) is possible later if startup seeding proves too slow; startup seeding is
   used now because it keeps the fresh H2 and the fresh bind mount consistent.

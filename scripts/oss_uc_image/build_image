@@ -4,9 +4,12 @@
 #               Dockerfile via Dockerfile.base; runs sbt -- the slow part)
 #   2. final  = thin overlay (duck config + seeding entrypoint) from this dir
 #
-# UC source checkout is located via $UC_REPO or --uc-repo (default below):
-#   UC_REPO=/path/to/unitycatalog ./build_image
-#   ./build_image --uc-repo /path/to/unitycatalog
+# UC source checkout is located via $UC_REPO or --uc-repo (default below); build_image fetches +
+# switches it to $UC_REF / --uc-ref (default v0.5.1, DETACHED) so a local build and CI pin the exact
+# same commit. Pass --no-switch to build whatever is currently checked out (local WIP):
+#   UC_REPO=/path/to/unitycatalog ./build_image                    # -> switches to v0.5.1
+#   ./build_image --uc-repo /path/to/unitycatalog --uc-ref v0.5.2
+#   ./build_image --no-switch                                      # build the current HEAD as-is
 #
 # Image names (registry-qualified; version + UC sha in the TAG):
 #   base : ghcr.io/benfleis/ducktest-unitycatalog-base:<version>-uc<gitref7>
@@ -51,6 +54,11 @@ IMAGE_NAME="${IMAGE_NAME:-ducktest-unitycatalog}"
 XBUILDER="${XBUILDER:-ducktest-uc-xbuild}"
 
 UC_REPO="${UC_REPO:-$HOME/src/d/unitycatalog}"
+# The unitycatalog source ref to build from. Owned HERE (not the CI checkout) so local + CI pin the same
+# commit; build_image fetches + switches $UC_REPO to it. Default is the single source of truth; override
+# via --uc-ref / UC_REF (empty/unset -> v0.5.1), or --no-switch to build the checkout as-is.
+UC_REF="${UC_REF:-v0.5.1}"
+UC_REMOTE="${UC_REMOTE:-origin}"
 
 # Host (daemon) arch, normalized to docker/Go names (arm64 / amd64).
 HOST_ARCH="$(docker version -f '{{.Server.Arch}}' 2>/dev/null || uname -m)"
@@ -60,6 +68,7 @@ PLATFORM="${PLATFORM:-linux/$HOST_ARCH}"
 rebuild_base=
 push=
 merge=
+no_switch=
 PUBLISH_ALIAS="${PUBLISH_ALIAS:-}"   # extra moving tag to stamp on --merge (e.g. `ci`); empty = none
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -72,6 +81,9 @@ while [ $# -gt 0 ]; do
     --platform=*)   PLATFORM="${1#*=}"; shift ;;
     --uc-repo)      UC_REPO="${2:?--uc-repo needs a path}"; shift 2 ;;
     --uc-repo=*)    UC_REPO="${1#*=}"; shift ;;
+    --uc-ref)       UC_REF="${2?--uc-ref needs a ref}"; shift 2 ;;
+    --uc-ref=*)     UC_REF="${1#*=}"; shift ;;
+    --no-switch)    no_switch=1; shift ;;
     -h|--help)      awk 'NR==1{next} /^#/{sub(/^# ?/,"");print;next} {exit}' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -85,6 +97,28 @@ if [ ! -f "$UC_REPO/build.sbt" ]; then
   exit 1
 fi
 REPO_DIR="$(cd "$UC_REPO" && pwd)"
+
+# --- pin the UC source to UC_REF (ref logic lives HERE, not in the CI checkout) -----------------------
+# fetch + switch $REPO_DIR to UC_REF (detached) so local and CI build the same commit, which is also
+# what lets a republish reuse the pushed base (base tag is keyed to the sha). We un-apply our OWN patches
+# first so they don't block the switch (re-applied in build mode below); UNRELATED uncommitted changes
+# still (correctly) block it and we bail. --no-switch skips this and builds the current HEAD as-is.
+if [ -z "$no_switch" ] && [ -n "$UC_REF" ]; then
+  shopt -s nullglob
+  for patch in "$SCRIPT_DIR"/patches/*.patch; do
+    if git -C "$REPO_DIR" apply --reverse --check "$patch" >/dev/null 2>&1; then
+      git -C "$REPO_DIR" apply --reverse "$patch"
+    fi
+  done
+  shopt -u nullglob
+  git -C "$REPO_DIR" fetch --tags "$UC_REMOTE" "$UC_REF" >/dev/null 2>&1 \
+    && git -C "$REPO_DIR" switch --detach FETCH_HEAD >/dev/null 2>&1 \
+    || { echo "error: could not fetch+switch '$REPO_DIR' to UC_REF='$UC_REF' via remote '$UC_REMOTE'." >&2
+         echo "       is the ref valid on the remote, and the tree free of unrelated changes?" >&2
+         echo "       (pass --no-switch to build the current checkout as-is.)" >&2
+         exit 1; }
+  echo ">> UC source pinned to $UC_REF ($(git -C "$REPO_DIR" rev-parse --short=7 HEAD))"
+fi
 
 # --- derive version / gitref from the checkout -------------------------------
 VERSION="$(sed -n 's/.*version[[:space:]]*:=[[:space:]]*"\(.*\)".*/\1/p' "$REPO_DIR/version.sbt" \
