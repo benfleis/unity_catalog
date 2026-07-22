@@ -35,9 +35,7 @@ def connect(request, *, schema="cmt"):
 
 
 def _preamble(build_dir, schema):
-    loads = "\n".join(
-        f"LOAD '{os.path.join(build_dir, 'extension', n, n + '.duckdb_extension')}';" for n in _EXTS
-    )
+    loads = "\n".join(f"LOAD '{os.path.join(build_dir, 'extension', n, n + '.duckdb_extension')}';" for n in _EXTS)
     return (
         f"{loads}\n"
         "CREATE SECRET (TYPE UNITY_CATALOG, TOKEN 'not-used', "

@@ -111,10 +111,7 @@ class OssProvisioner:
             b.plan.append(f"start OSS UC container {server.IMAGE} on {server.ENDPOINT}")
             for s in specs:
                 if isinstance(s.source, TableSpec):
-                    b.plan.append(
-                        f"instantiate fixture {s.source.name!r} -> "
-                        f"{_commit_schema(s)} ({s.access})"
-                    )
+                    b.plan.append(f"instantiate fixture {s.source.name!r} -> {_commit_schema(s)} ({s.access})")
             if not any(isinstance(s.source, TableSpec) for s in specs):
                 for schema in server._SEED_SCHEMAS:
                     b.plan.append(f'uctl create {schema} {_SEED_TABLE} "{_SEED_COLUMNS}"')
