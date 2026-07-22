@@ -50,7 +50,7 @@ from ducktest.provision import Provisioner as _BaseProvisioner
 
 # The databricks_gen library (atomic SQL primitives over the SDK) lives in scripts/.
 # databricks -> uc -> py -> test -> <repo root>  (4 dirs up from this file's dir); put
-# `scripts` on sys.path so `import databricks_gen` resolves even when the --cli flow loads
+# `scripts` on sys.path so `import databricks_gen` resolves even when the --repl flow loads
 # this engine without the root conftest. databricks_gen imports the SDK lazily, so this
 # stays cheap -- test COLLECTION never pulls in databricks-sdk.
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
@@ -102,7 +102,7 @@ def _expand(s: str) -> str:
         # Clean UsageError (not a bare KeyError → INTERNALERROR) so a missing var
         # reads as a user fix, not a harness crash.
         raise pytest.UsageError(
-            f"--cli: unresolved environment variable in @requires source {s!r} "
+            f"--repl: unresolved environment variable in @requires source {s!r} "
             f"(expanded to {out!r}). Set it in the environment "
             "(e.g. UC_TEST_CATALOG, or run under env_databricks)."
         )
@@ -110,7 +110,7 @@ def _expand(s: str) -> str:
 
 
 def _default_catalog_env():
-    """Default the neutral UC_TEST_CATALOG so `--cli` works without a wrapper.
+    """Default the neutral UC_TEST_CATALOG so `--repl` works without a wrapper.
 
     Honors an explicit UC_TEST_CATALOG (set by you, env_databricks, or CI);
     else falls back to the standard write-test catalog. Override by exporting
@@ -179,7 +179,7 @@ def _require_creds():
     """Raise pytest.UsageError unless the core creds are in the environment.
 
     Creds are fetched once on the controller (load_creds: env-wins, else 1Password) + broadcast to
-    workers; the conftest hard-fails when they're unavailable. This is the --cli-path guard.
+    workers; the conftest hard-fails when they're unavailable. This is the --repl-path guard.
     """
     if not have_core_creds():
         raise pytest.UsageError(f"Databricks credentials unavailable ({cred_failure_detail()}).")
@@ -192,7 +192,7 @@ def ensure_env(*, dry_run=False):
     --co / --provision-dry-run never need creds). Creds are populated once on the controller and
     broadcast to workers (see load_creds + the conftest); this only verifies. Safe to call
     repeatedly. The conftest hook calls this so the run path (run_paired) gets the catalog
-    default + the creds check; --cli calls it too.
+    default + the creds check; --repl calls it too.
     """
     _default_catalog_env()
     if not dry_run:
@@ -364,7 +364,7 @@ class DatabricksProvisioner(_BaseProvisioner):
         props = dict(CATALOG_MANAGED_PROPS) if spec.property("commit") == "cmt" else None
         location = self._s3_location(target) if spec.property("storage") == "external" else None
         definition = load_table_spec(spec.source, [_FIXTURES])
-        tbl = canonicalize(self._duckdb_cli(), definition)
+        tbl = canonicalize(self._duckdb_shell(), definition)
         cols = ", ".join(f"{n} {t}" for n, t in map_columns(tbl, DATABRICKS_TYPE_MAP))
         rows = resolve_seed(spec.source.seed, tbl.seed_data)
         with step(f"seed {target} from fixture {name!r} ({cell_desc})"):
@@ -401,8 +401,8 @@ class DatabricksProvisioner(_BaseProvisioner):
         cat, schema, table = _split_source(target)
         return f"s3://{config.S3_BUCKET}/{cat}/{schema}/{table}"
 
-    def _duckdb_cli(self):
-        """The duckdb CLI from the same build the driver resolves the unittest binary from."""
+    def _duckdb_shell(self):
+        """The duckdb shell from the same build the driver resolves the unittest binary from."""
         wd = getattr(self._config, "sqllogic_working_dir", None) or os.getcwd()
         return find_duckdb(self._config, wd)
 
@@ -481,7 +481,7 @@ ATTACH '{state.catalog}' AS unity (TYPE unity_catalog, DEFAULT_SCHEMA '{state.de
 USE unity;
 
 .print ''
-.print '== pytest --cli ready =='
+.print '== pytest --repl ready =='
 .print 'Attached: unity -> {state.catalog}, DEFAULT_SCHEMA {state.default_schema}'
 .print 'Provisioned (reference tables BARE; the cell IS the default schema):'
 {table_lines}

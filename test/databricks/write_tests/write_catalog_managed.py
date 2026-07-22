@@ -4,7 +4,7 @@
 (catalog-managed commit protocol, UC-managed storage): the provisioner create+inserts the
 fixture, injects CATALOG/SCHEMA into the body (run_paired env=...), and drops the cell
 on teardown. The body exercises the staged-commit + backfill (delta.yaml v1) protocol. The
-same @requires + provisioner also drive `pytest --cli`.
+same @requires + provisioner also drive `pytest --repl`.
 """
 
 from ducktest import TableSpec, requires, run_paired

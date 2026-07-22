@@ -84,14 +84,14 @@ class OssProvisioner:
     """Provisioner protocol impl (driver/provision.py) for the OSS UC ducktest container."""
 
     def __init__(self, config=None):
-        # config lets us resolve the duckdb CLI from the SAME build the driver runs the
+        # config lets us resolve the duckdb shell from the SAME build the driver runs the
         # unittest binary from (--build / $BUILD_DIR / --unittest-binary), not a fixed path.
         self._config = config
         # (schema, table) of shared ro tables created this session (created once).
         self._shared_ro = set()
 
-    def _duckdb_cli(self):
-        """The duckdb CLI from the same build the driver resolves the unittest binary from."""
+    def _duckdb_shell(self):
+        """The duckdb shell from the same build the driver resolves the unittest binary from."""
         wd = getattr(self._config, "sqllogic_working_dir", None) or os.getcwd()
         return find_duckdb(self._config, wd)
 
@@ -138,7 +138,7 @@ class OssProvisioner:
             return b
 
         # RUN path: reuse the session container; instantiate each TableSpec spec as a table.
-        duckdb_bin = self._duckdb_cli()
+        duckdb_bin = self._duckdb_shell()
         refs = []  # unified identity refs -> bindings.env (see uc.identity)
         primary_ref = None
         for s in specs:
@@ -214,7 +214,7 @@ class OssProvisioner:
             # dry-run print: must not require a built binary -> env/default (unchanged).
             build_dir = os.environ.get("BUILD_DIR", os.path.join(str(REPO_ROOT), "build", "release"))
         else:
-            # real launch: the duckdb CLI (hence its build dir) is a precondition here.
+            # real launch: the duckdb shell (hence its build dir) is a precondition here.
             wd = getattr(self._config, "sqllogic_working_dir", None) or os.getcwd()
             build_dir = os.path.dirname(find_duckdb(self._config, wd))
 
