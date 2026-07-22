@@ -11,15 +11,15 @@ Serves BOTH the driver's generic `resources` fixture (the run path) and `--repl`
   * --repl (no fixtures run, so the provisioner owns the container): start a fresh
     container and seed the legacy playground table `id_name` in both schemas. Unchanged.
 
-The `storage` axis maps onto ducktest' seeded schema names (managed -> cmt, external ->
-plain). Seed-data insertion into UC is not wired yet, so seeded fixtures must use
+The `commit` axis (cmt / plain) IS the seeded schema name, so it maps 1:1 to the schema.
+Seed-data insertion into UC is not wired yet, so seeded fixtures must use
 `TableSpec(...).Seed(None)` (empty table; the body does its own inserts) for now.
 """
 
 import os
 from dataclasses import dataclass, field
 
-from ducktest import TableSpec, find_duckdb
+from ducktest import ProvisionFailed, TableSpec, find_duckdb
 from ducktest.fixtures import canonicalize, load_table_spec, map_columns, resolve_seed
 
 from uc import REPO_ROOT, server, uctl
@@ -65,21 +65,18 @@ class OssBindings:
     owns_container: bool = False  # True only on the --repl path (we started the container)
 
 
-# The generic @requires(storage=...) axis carries the framework values
-# "managed"/"external"; OSS seeds schemas named cmt/plain, so map storage -> schema
-# here. Unknown values pass through unchanged (robust to future axis values).
-_STORAGE_TO_SCHEMA = {"managed": "cmt", "external": "plain"}
-
-
-def _storage_to_schema(storage):
-    return _STORAGE_TO_SCHEMA.get(storage, storage)
+# The @requires `commit` axis carries the semantic table type -- "cmt" (catalog-managed)
+# or "plain" -- which ARE the OSS seed schema names, so it maps 1:1 to the schema. (The
+# databricks provisioner reads both `commit` and `storage`; OSS only needs `commit`.)
+def _commit_schema(spec):
+    return spec.property("commit") or "cmt"
 
 
 def _default_schema_for(specs):
-    """DEFAULT_SCHEMA to ATTACH: first rw spec's storage mapped to its schema, else cmt."""
+    """DEFAULT_SCHEMA to ATTACH: first rw spec's commit type (= schema), else cmt."""
     for s in specs:
         if s.access == "rw":
-            return _storage_to_schema(s.property("storage"))
+            return _commit_schema(s)
     return "cmt"
 
 
@@ -116,7 +113,7 @@ class OssProvisioner:
                 if isinstance(s.source, TableSpec):
                     b.plan.append(
                         f"instantiate fixture {s.source.name!r} -> "
-                        f"{_storage_to_schema(s.property('storage'))} ({s.access})"
+                        f"{_commit_schema(s)} ({s.access})"
                     )
             if not any(isinstance(s.source, TableSpec) for s in specs):
                 for schema in server._SEED_SCHEMAS:
@@ -130,7 +127,12 @@ class OssProvisioner:
         if server.active_server() is None:
             # --repl path: own a fresh container + seed the legacy playground (unchanged).
             b.owns_container = True
-            srv = server.start_container()
+            try:
+                srv = server.start_container()
+            except ProvisionFailed:
+                raise
+            except Exception as e:  # docker run / readiness failure -- semantically provisioning
+                raise ProvisionFailed(f"starting the OSS UC container failed: {e}") from e
             b.data_dir = srv.data_dir
             for schema in server._SEED_SCHEMAS:
                 uctl("drop", schema, _SEED_TABLE, check=False)  # idempotent clean slate
@@ -145,7 +147,7 @@ class OssProvisioner:
         for s in specs:
             if not isinstance(s.source, TableSpec):
                 continue
-            schema = _storage_to_schema(s.property("storage"))
+            schema = _commit_schema(s)
             name = self._instantiate(duckdb_bin, s, schema, token, b)
             ref = TableRef(s.resolved_name(), catalog, schema, name, s.access)
             refs.append(ref)
@@ -170,8 +172,15 @@ class OssProvisioner:
         rw -> a unique per-test `<name>_rw_<token>` (dropped on teardown); ro -> a shared
         table created ONCE per session (guarded; left for the session).
         """
-        definition = load_table_spec(spec.source, [str(_FIXTURES)])
-        table = canonicalize(duckdb_bin, definition)
+        try:
+            definition = load_table_spec(spec.source, [str(_FIXTURES)])
+            table = canonicalize(duckdb_bin, definition)
+        except ProvisionFailed:
+            raise
+        except Exception as e:  # fixture read / duckdb-middleman inspection -- semantically provisioning
+            raise ProvisionFailed(
+                f"inspecting fixture {spec.source.name!r} via the duckdb middleman failed: {e}"
+            ) from e
         col_spec = ", ".join(f"{n} {t}" for n, t in map_columns(table, UC_TYPE_MAP))
 
         if spec.access == "rw":

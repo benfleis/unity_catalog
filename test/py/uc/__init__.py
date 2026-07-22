@@ -9,8 +9,9 @@ Imported by drivers as `from uc import uctl` / `from uc.server import uc_server`
 
 import os
 import subprocess
-import sys
 from pathlib import Path
+
+from ducktest import ProvisionFailed
 
 # test/py/uc/__init__.py -> repo root is 3 dirs up (uc -> py -> test -> root).
 # uc/ is a real dir (only test/py/driver is a symlink), so resolve() is safe here.
@@ -30,6 +31,7 @@ def uctl(*args, check=True):
     """
     r = subprocess.run([UCTL, *args], capture_output=True, text=True)
     if check and r.returncode != 0:
-        sys.stderr.write(r.stdout + r.stderr)
-        r.check_returncode()
+        # failed uctl IS provisioning failure -- raise with the output so it surfaces clean log line
+        out = (r.stdout + r.stderr).strip()
+        raise ProvisionFailed(f"uctl {' '.join(map(str, args))} failed (exit {r.returncode}): {out}")
     return r

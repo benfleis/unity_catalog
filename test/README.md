@@ -1,43 +1,74 @@
 # Testing this extension
 
-Tests are **pytest-driven** via the `duckdb-pytest-driver`: each `.test` (SQLLogic) file is run
-through the duckdb `unittest` binary, with Python `.py` drivers alongside for declarative
-`@requires` provisioning (table fixtures, catalog setup) and managed teardown. The `.test` file
-stays the central artifact; the Python is thin glue.
+Tests are **pytest-driven** via the `duckdb-pytest-driver` (ducktest). Most tests are a `.test`
+(SQLLogic) file run through the duckdb `unittest` binary with a same-stem Python `.py` driver
+alongside for declarative `@requires` provisioning (tables, catalog setup) and managed teardown —
+the `.test` file stays the central artifact, the Python is thin glue. Where a flow doesn't fit
+SQLLogic (e.g. concurrency), a **pure-Python** `test_*.py` is a first-class test too.
+
+## Running
+
+First run builds the extension; after that pytest drives the suites. **No credentials and no
+environment variables are needed for the default (OSS) path** — the OSS Unity Catalog container is
+started and torn down for you.
+
+```bash
+make venv            # one-time: create the uv venv (uv sync)
+make test            # build + run the OSS-local suite (boots the UC docker container)
+make test_databricks # the live Databricks suite (creds auto-fetched via 1Password; see below)
+make test_all        # both
+```
+
+Once built, drive pytest directly in the venv (selection is by suite marker):
+
+```bash
+uv run pytest                     # the default (oss_local) suite
+uv run pytest -m oss_local        # just the OSS subtree
+uv run pytest -m databricks       # just the Databricks subtree (needs creds)
+uv run pytest -n0 -s <path>       # serial + live output — debugging one test / the container
+uv run pytest --repl <a_test>     # provision the test's @requires, drop into an attached duckdb
+```
+
+The OSS suite needs the container image available. `make test` defaults to the locally-built
+`:local` tag; set `DUCKTEST_UC_IMAGE=ghcr.io/benfleis/ducktest-unitycatalog:ci` to use the published
+one. Building/publishing the image: [`scripts/oss_uc_image/`](../scripts/oss_uc_image/README.md).
 
 ## Layout
 
 - **`oss_local/`** — run against a **local OSS Unity Catalog** server (the ducktest docker image,
   started per session by the `uc_server` fixture). Runs in CI. `-m oss_local` selects the subtree.
-  The image (`ghcr.io/benfleis/ducktest-unitycatalog`, `:ci` is the tag CI pulls) is built and
-  published from [`scripts/oss_uc_image/`](../scripts/oss_uc_image/README.md) — see that README for the
-  build + publish process.
-- **`databricks/`** — run against a **live Databricks workspace** (creds via
-  `scripts/env_databricks` → `DATABRICKS_*` + `DATABRICKS_WAREHOUSE_ID`). Not in CI; tests skip
-  gracefully without creds. Read tables auto-provision from the Delta-artifact defs in
-  `databricks/data/`; write tests seed the `id_name` fixture into an isolated cell and tear it down.
-- **`fixtures/`** — neutral, backend-agnostic table fixtures (e.g. `id_name`), instantiated per
-  backend via the driver's Fixture path. Shared by OSS and Databricks.
+  Holds both `.test`+`.py` pairs and pure-Python `test_*.py` (e.g. `test_concurrent_rw.py`).
+- **`databricks/`** — run against a **live Databricks workspace** (creds via `make test_databricks` /
+  `scripts/env_databricks` → `DATABRICKS_*`; auto-fetched from 1Password if not already in env). Not
+  in CI; skips cleanly without creds. Read tables auto-provision from the Delta-artifact defs in
+  `databricks/data/`; write tests seed the `id_name` table into an isolated cell and tear it down.
+- **`fixtures/`** — neutral, backend-agnostic table definitions (`id_name`, `simple_table`),
+  instantiated per backend via the driver's `TableSpec` path (`load_table_spec`). Shared by OSS and
+  Databricks.
 - **`databricks/data/`** — Databricks-specific Delta-artifact definitions (schema evolution, column
   mapping, catalog-managed staged/backfilled commits) that aren't portable fixtures; run verbatim
   via `databricks-gen from-sql`.
 
-## Running
+## Coverage today
 
-```bash
-make test                                  # pytest over test/ (OSS runs; databricks skips w/o creds)
-env_databricks pytest test/databricks  # the databricks suite, with creds
-pytest -m oss_local                        # just the OSS subtree
-```
-
-## Coverage today (local OSS)
+Local OSS (`oss_local/`):
 
 - delta.yaml v1 read/write on a catalog-managed (CMT) table: `LoadTable` / `UpdateTable`
-  (`oss_local/table-cmt/catalog_managed.test`).
+  (`table-cmt/catalog_managed.test`).
 - Managed vs non-managed dispatch: `IsCatalogManaged()` selects the v1 path; a MANAGED table without
   the `catalogManaged` feature and EXTERNAL tables take the plain Delta path and do **not** call
-  `LoadTable`/`UpdateTable` (asserted via `duckdb_logs()` counts — `oss_local/table-plain/`).
+  `LoadTable`/`UpdateTable` (asserted via `duckdb_logs()` counts — `table-plain/`).
 - Backfill watermark advance across DETACH/ATTACH (`set-latest-backfilled-version`).
+- **Concurrent readers/writers** (pure-Python, matrixed managed × plain):
+  `test_concurrent_rw.py` runs N racing writers (`INSERT … max(id)+1`, retrying on version
+  conflict) + M readers, asserting the gapless commit invariant `max(id) == count(*) == version` at
+  every snapshot.
+
+Databricks (live):
+
+- CMT delta read, column-mapped read, time-travel, attach, and a TPC-H read pass (`tpch.test` —
+  hand-written scans / pushdown / join vs the premade sf0.01 tables); write + write-CMT under
+  `write_tests/`.
 
 ## Testing gaps / TODO
 
@@ -62,7 +93,9 @@ orchestrate server state + a side-channel writer between SQL steps. Each below n
       `latest-table-version`. Assert read correctness + the warning line via `duckdb_logs()`.
 
 - [ ] **etag optimistic-concurrency conflict (`assert-etag`).** No test triggers a
-      `CommitVersionConflictException`. **Unblock:** bring a CMT table to a known etag, then commit
+      `CommitVersionConflictException` via the intended path. **Partly probed** by
+      `oss_local/test_concurrent_rw.py` (racing in-process `UpdateTable`s, retry-on-conflict). Still
+      open: the deliberate out-of-band stale-etag case — bring a CMT table to a known etag, commit
       out-of-band (second writer / API call) so the next `UpdateTable` sends a stale etag; assert the
       conflict surfaces. Also covers the `CommitState` snapshot under genuine read/write interleave.
 
@@ -87,9 +120,9 @@ orchestrate server state + a side-channel writer between SQL steps. Each below n
 
 - [ ] **Concurrency / data races (TSan).** `commit_state` is now `MutexProtected<CommitState>`
       (`src/include/uc_mutex_protected.hpp`) so the etag/backfill pair can't be torn or read unlocked.
-      Still uncovered by tests, and the two `TODO(race)` unlocked `internal_attached_database` derefs
-      (`GetInternalCatalog` / `InternalCheckpoint`) remain. **Unblock:** a TSan build driving a
-      concurrent reader (bind/scan → re-attach) and writer (commit) against one shared attach.
+      `oss_local/test_concurrent_rw.py` now drives a concurrent reader/writer workload (functional,
+      not TSan) against one shared attach; still open is the **TSan build** and the two `TODO(race)`
+      unlocked `internal_attached_database` derefs (`GetInternalCatalog` / `InternalCheckpoint`).
       **Target design** (the lock pass, not piecemeal): widen the `MutexProtected` pattern to also
       cover `is_dirty` and `internal_attached_database` — fold all three into one
       `MutexProtected<AttachState>` and drop the bare `attach_lock`, making unlocked access
