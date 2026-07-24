@@ -175,7 +175,42 @@ def _stop_service(config):
     stop_container(data_dir)
 
 
-OSS_SERVICE = service("oss-uc-server", start=_start_service, stop=_stop_service, fixture="uc_server")
+def _attach_service(overrides, config):
+    """Service `attach`: build a block for an EXTERNALLY-running OSS server (`--existing-service` /
+    `DUCKTEST_EXISTING_SERVICE_OSS_UC_SERVER`) -- not started or stopped by this run. Found missing
+    live (a real reverse-port-mapped server): with no `attach`, the framework fell back to the raw
+    `{"endpoint": url}` override map, and `uc_server`'s unconditional `block["container"]`/
+    `block["data_dir"]` reads `KeyError`'d.
+
+    `data_dir` is genuinely unknowable here (we didn't start the container, so we don't know its host
+    bind-mount path) -- `None` unless the override map supplies it explicitly. Any test relying on
+    `file://` table-path resolution (which needs a shared bind-mount with wherever the server actually
+    runs) won't work against a truly remote/reverse-port-mapped server regardless of this fix -- that's
+    inherent to attaching across a network boundary, not something to paper over here.
+    """
+    return {
+        "endpoint": overrides.get("endpoint", ENDPOINT),
+        "container": overrides.get("container", CONTAINER),
+        "data_dir": overrides.get("data_dir"),
+    }
+
+
+def _alive(block) -> bool:
+    """Cheap, non-authenticating liveness probe (SERVICES.md): any response from the schemas endpoint
+    means the server is up -- a declared-but-dead attach should fail loud, not die opaquely later."""
+    url = f"{block['endpoint']}/api/2.1/unity-catalog/schemas?catalog_name={_CATALOG}"
+    try:
+        urllib.request.urlopen(url, timeout=3)
+        return True
+    except urllib.error.HTTPError:
+        return True  # server responded (even an error status) => up
+    except (urllib.error.URLError, OSError):
+        return False
+
+
+OSS_SERVICE = service(
+    "oss-uc-server", start=_start_service, stop=_stop_service, attach=_attach_service, alive=_alive, fixture="uc_server"
+)
 
 
 @pytest.fixture(scope="session")
