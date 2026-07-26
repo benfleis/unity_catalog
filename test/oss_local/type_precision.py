@@ -18,31 +18,7 @@ import json
 import urllib.error
 import urllib.request
 
-try:
-    from driver import run_paired
-except ImportError:
-    import pytest
-
-    # Parked: this test rode onto main/v1.5 ahead of the duckdb-pytest-driver. While the driver
-    # is absent there's nothing to run, so skip quietly -- `make test` (the bare unittest binary)
-    # ignores .py files anyway, and an unrelated `pytest` run shouldn't explode just because the
-    # driver hasn't landed yet.
-    pytest.skip(
-        "duckdb-pytest-driver not present yet; type_precision regression parked until it lands.",
-        allow_module_level=True,
-    )
-else:
-    # POISON PILL -- deliberately loud, do NOT soften. Fires the moment the driver DOES land,
-    # which is the signal to come back and finish this off: confirm the oss_local uc_server
-    # fixture boots, then delete this whole try/except and keep just the bare import above.
-    # A hard fail at exactly that moment forces the fix-up instead of letting the test rot
-    # silently skipped once its one dependency is finally available.
-    raise RuntimeError(
-        "POISON PILL: duckdb-pytest-driver is present -- finish wiring type_precision.py "
-        "(confirm the oss_local uc_server fixture runs, drop this guard down to the bare "
-        "`from driver import run_paired`), then delete this pill. "
-        "See the fix-type-precision-null landing."
-    )
+from ducktest import run_paired
 
 
 def _register_null_precision_table(endpoint, *, catalog="duck", schema="cmt", name="spark_like"):
