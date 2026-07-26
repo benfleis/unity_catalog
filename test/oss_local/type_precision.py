@@ -15,6 +15,7 @@ If the server coerces null->0, this won't reproduce and we fall back to a mock /
 """
 
 import json
+import time
 import urllib.error
 import urllib.request
 
@@ -56,14 +57,44 @@ def _register_null_precision_table(endpoint, *, catalog="duck", schema="cmt", na
     )
     try:
         with urllib.request.urlopen(req, timeout=5) as r:
-            return json.loads(r.read())
+            r.read()  # created-table response; the barrier below is what we assert on
     except urllib.error.HTTPError as e:
         # Surface UC's validation detail (urllib buries it in the response body) so a 400 names
         # the offending field instead of a bare "Bad Request".
         raise AssertionError(f"POST /tables -> {e.code} {e.reason}: {e.read().decode()}") from e
+    return catalog, schema, name
+
+
+def _wait_until_listed(endpoint, catalog, schema, name, *, timeout=30.0):
+    """Block until `name` is visible via GET /tables.
+
+    POST /tables returns before the new table is listable on a freshly-started UC container
+    (read-after-write) -- polling turns that race into a barrier, so the paired .test's
+    SHOW ALL TABLES never sometimes sees 0 rows. Mirrors server.py's readiness-wait pattern.
+    """
+    url = (
+        f"{endpoint.rstrip('/')}/api/2.1/unity-catalog/tables"
+        f"?catalog_name={catalog}&schema_name={schema}"
+    )
+    deadline = time.monotonic() + timeout
+    seen = None
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=5) as r:
+                tables = json.loads(r.read()).get("tables", [])
+            seen = [t.get("name") for t in tables]
+            if name in seen:
+                return
+        except urllib.error.URLError as e:
+            seen = str(e)
+        time.sleep(0.1)
+    raise AssertionError(
+        f"{catalog}.{schema}.{name} not listable via GET /tables within {timeout}s; last saw: {seen}"
+    )
 
 
 def test_type_precision_null(request, uc_server):
-    """Register the null-precision table, then run the paired .test (attach + list)."""
-    _register_null_precision_table(uc_server.endpoint)
+    """Register the null-precision table, wait for it to be listable, then run the paired .test."""
+    catalog, schema, name = _register_null_precision_table(uc_server.endpoint)
+    _wait_until_listed(uc_server.endpoint, catalog, schema, name)
     run_paired(request)
