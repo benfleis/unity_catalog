@@ -142,6 +142,13 @@ jobs:
   cloud:
     name: Cloud (Databricks)
     needs: build
+    # Trusted refs only: pushes to main and workflow_dispatch, plus PRs whose branch lives in this
+    # repo (duckdb-org, not a fork). Fork PRs never receive secrets, so they'd only fail -- skip
+    # them. (The `environment: cloud` required-reviewer protection is the secret-release layer.)
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: cloud
