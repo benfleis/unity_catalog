@@ -72,10 +72,7 @@ def _wait_until_listed(endpoint, catalog, schema, name, *, timeout=30.0):
     (read-after-write) -- polling turns that race into a barrier, so the paired .test's
     SHOW ALL TABLES never sometimes sees 0 rows. Mirrors server.py's readiness-wait pattern.
     """
-    url = (
-        f"{endpoint.rstrip('/')}/api/2.1/unity-catalog/tables"
-        f"?catalog_name={catalog}&schema_name={schema}"
-    )
+    url = f"{endpoint.rstrip('/')}/api/2.1/unity-catalog/tables?catalog_name={catalog}&schema_name={schema}"
     deadline = time.monotonic() + timeout
     seen = None
     while time.monotonic() < deadline:
@@ -88,9 +85,7 @@ def _wait_until_listed(endpoint, catalog, schema, name, *, timeout=30.0):
         except urllib.error.URLError as e:
             seen = str(e)
         time.sleep(0.1)
-    raise AssertionError(
-        f"{catalog}.{schema}.{name} not listable via GET /tables within {timeout}s; last saw: {seen}"
-    )
+    raise AssertionError(f"{catalog}.{schema}.{name} not listable via GET /tables within {timeout}s; last saw: {seen}")
 
 
 def test_type_precision_null(request, uc_server):
