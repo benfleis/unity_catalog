@@ -36,10 +36,16 @@ _SPARK_LIKE_TABLE = {
     "storage_location": "file:///tmp/uc-type-precision-repro",
     "table_id": "00000000-0000-0000-0000-000000000001",
     "columns": [
-        {"name": "id", "type_text": "bigint", "type_name": "LONG",
-         "type_precision": None, "type_scale": None, "position": 0, "nullable": True},
-        {"name": "name", "type_text": "string", "type_name": "STRING",
-         "position": 1, "nullable": True},
+        {
+            "name": "id",
+            "type_text": "bigint",
+            "type_name": "LONG",
+            "type_precision": None,
+            "type_scale": None,
+            "position": 0,
+            "nullable": True,
+        },
+        {"name": "name", "type_text": "string", "type_name": "STRING", "position": 1, "nullable": True},
     ],
 }
 
@@ -106,9 +112,7 @@ def test_type_precision_null():
             f"ATTACH '{_CATALOG}' AS unity (TYPE unity_catalog, DEFAULT_SCHEMA 'cmt');"
             "SELECT 'spark_like_count=' || count(*) FROM (SHOW ALL TABLES) t WHERE t.name = 'spark_like';"
         )
-        result = subprocess.run(
-            [_duckdb_bin(), "-unsigned", "-c", sql], capture_output=True, text=True, timeout=60
-        )
+        result = subprocess.run([_duckdb_bin(), "-unsigned", "-c", sql], capture_output=True, text=True, timeout=60)
 
     detail = f"\n--- stderr ---\n{result.stderr}\n--- mock requests ---\n" + "\n".join(mock.requests)
     # Core regression: the null type_precision must not raise while listing.
