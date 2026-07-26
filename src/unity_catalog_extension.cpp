@@ -12,6 +12,8 @@
 #include "storage/unity_catalog.hpp"
 #include "storage/uc_transaction_manager.hpp"
 #include "functions/uc_checkpoint.hpp"
+#include "functions/uc_deletion_vector.hpp"
+#include "functions/uc_plan_table_scan.hpp"
 #include "uc_api.hpp"
 #include "uc_logging.hpp"
 #include "unity_catalog_extension.hpp"
@@ -202,6 +204,12 @@ static void LoadInternal(ExtensionLoader &loader) {
 	// Register table checkpoint functions
 	loader.RegisterFunction(UCCheckpointTableFunction());
 	loader.RegisterFunction(UCForceCheckpointTableFunction());
+
+	// Inspect/decode Iceberg deletion vectors from SQL (see functions/uc_deletion_vector.hpp)
+	loader.RegisterFunction(UCReadDeletionVectorFunction());
+
+	// Internal: drive the IRC scan-plan request/poll directly (see functions/uc_plan_table_scan.hpp)
+	loader.RegisterFunction(UCInternalPlanTableScanFunction());
 }
 
 void UnityCatalogExtension::Load(ExtensionLoader &loader) {
