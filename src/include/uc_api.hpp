@@ -175,11 +175,13 @@ public:
 	static UCScanPlanResult PlanTableScan(ClientContext &ctx, const string &catalog_name, const string &schema_name,
 	                                      const string &table_name, const UCCredentials &credentials,
 	                                      const string &scan_plan_endpoint, const string &filter_json = "");
-	// IRC spec: fetchPlanningResult — GET .../plan/{plan-id}.
+	// IRC spec: fetchPlanningResult — GET .../plan/{plan-id}. retry_after_ms_out (optional) receives
+	// the response's Retry-After delay in ms (-1 if absent), so the poll loop can pace itself.
 	static UCScanPlanResult FetchPlanningResult(ClientContext &ctx, const string &catalog_name,
 	                                            const string &schema_name, const string &table_name,
 	                                            const string &plan_id, const UCCredentials &credentials,
-	                                            const string &scan_plan_endpoint);
+	                                            const string &scan_plan_endpoint,
+	                                            optional_ptr<int64_t> retry_after_ms_out = nullptr);
 	// IRC spec: fetchScanTasks — POST .../tasks. Exchanges one plan-task token for file-scan-tasks.
 	// The response is a ScanTasks payload (no status field); result.status is always COMPLETED on success.
 	static UCScanPlanResult FetchScanTasks(ClientContext &ctx, const string &catalog_name, const string &schema_name,

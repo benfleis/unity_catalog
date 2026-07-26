@@ -67,8 +67,10 @@ static void EnsureHttpfsExtension(const shared_ptr<DatabaseInstance> &db) {
 	}
 }
 
-static string MakeRequest(ClientContext &ctx, const string &url, const string &token = "", const string &body = "",
-                          bool send_as_get = false) {
+// Core request: returns the full response (so callers can read headers/status), throwing on
+// non-2xx. MakeRequest wraps it for callers that only need the body.
+static unique_ptr<HTTPResponse> MakeRequestResp(ClientContext &ctx, const string &url, const string &token = "",
+                                                const string &body = "", bool send_as_get = false) {
 	auto db = ctx.db;
 	EnsureHttpfsExtension(db);
 	auto &http_util = HTTPUtil::Get(*db);
@@ -95,7 +97,52 @@ static string MakeRequest(ClientContext &ctx, const string &url, const string &t
 		                  static_cast<int>(resp->status), resp->GetError(),
 		                  resp->body.empty() ? "(empty)" : resp->body);
 	}
-	return std::move(resp->body);
+	return resp;
+}
+
+static string MakeRequest(ClientContext &ctx, const string &url, const string &token = "", const string &body = "",
+                          bool send_as_get = false) {
+	return std::move(MakeRequestResp(ctx, url, token, body, send_as_get)->body);
+}
+
+// Retry-After delay-seconds header -> milliseconds; -1 if absent or not a plain integer (the
+// HTTP-date form isn't emitted by these planning endpoints, so we don't parse it).
+static int64_t ParseRetryAfterMs(const HTTPResponse &resp) {
+	if (!resp.HasHeader("Retry-After")) {
+		return -1;
+	}
+	try {
+		auto secs = std::stoll(resp.GetHeaderValue("Retry-After"));
+		return secs >= 0 ? secs * 1000 : -1;
+	} catch (...) {
+		return -1;
+	}
+}
+
+// Best-effort DELETE of a server-side plan we're abandoning (query cancelled, timed out, or
+// errored mid-poll) so the server can release it. Never throws — a failed cleanup must not mask
+// the original error.
+static void CancelPlan(ClientContext &ctx, const string &scan_plan_endpoint, const string &catalog_name,
+                       const string &schema_name, const string &table_name, const string &plan_id,
+                       const string &token) {
+	if (plan_id.empty()) {
+		return;
+	}
+	UC_LOG_DEBUG(ctx, "scan-plan.CancelPlan plan_id=%s", plan_id);
+	string url = scan_plan_endpoint + "/v1/catalogs/" + catalog_name + "/namespaces/" + schema_name + "/tables/" +
+	             table_name + "/plan/" + plan_id;
+	try {
+		auto db = ctx.db;
+		auto &http_util = HTTPUtil::Get(*db);
+		auto params = http_util.InitializeParameters(*db, url);
+		params->logger = ctx.logger;
+		HTTPHeaders hdrs(*ctx.db);
+		AuthenticateViaBearerToken(hdrs, token);
+		DeleteRequestInfo req(url, hdrs, *params);
+		http_util.Request(req);
+	} catch (...) {
+		// best-effort cleanup — swallow
+	}
 }
 
 template <class TYPE, uint8_t TYPE_NUM, TYPE (*get_function)(duckdb_yyjson::yyjson_val *obj)>
@@ -708,12 +755,16 @@ static const char *UCScanPlanStatusToString(UCScanPlanStatus s) {
 
 UCScanPlanResult UCAPI::FetchPlanningResult(ClientContext &ctx, const string &catalog_name, const string &schema_name,
                                             const string &table_name, const string &plan_id,
-                                            const UCCredentials &credentials, const string &scan_plan_endpoint) {
+                                            const UCCredentials &credentials, const string &scan_plan_endpoint,
+                                            optional_ptr<int64_t> retry_after_ms_out) {
 	string url = scan_plan_endpoint + "/v1/catalogs/" + catalog_name + "/namespaces/" + schema_name + "/tables/" +
 	             table_name + "/plan/" + plan_id;
 	UC_LOG_DEBUG(ctx, "scan-plan.FetchPlanningResult plan_id=%s", plan_id);
-	auto resp = MakeRequest(ctx, url, credentials.token);
-	auto result = ParseScanPlanResponse(resp);
+	auto resp = MakeRequestResp(ctx, url, credentials.token);
+	if (retry_after_ms_out) {
+		*retry_after_ms_out = ParseRetryAfterMs(*resp);
+	}
+	auto result = ParseScanPlanResponse(resp->body);
 	UC_LOG_DEBUG(ctx, "scan-plan.FetchPlanningResult plan_id=%s -> status=%s inline=%zu plan_tasks=%zu delete=%zu%s%s",
 	                 plan_id, UCScanPlanStatusToString(result.status), result.file_scan_tasks.size(),
 	                 result.plan_tasks.size(), result.delete_files.size(),
@@ -732,8 +783,9 @@ UCScanPlanResult UCAPI::PlanTableScan(ClientContext &ctx, const string &catalog_
 	                                  : "{\"case-sensitive\":false,\"filter\":" + filter_json + "}";
 	UC_LOG_DEBUG(ctx, "scan-plan.PlanTableScan %s.%s.%s filter=%s", catalog_name, schema_name, table_name,
 	                 filter_json.empty() ? "(none)" : filter_json);
-	auto resp = MakeRequest(ctx, url, credentials.token, body);
-	auto result = ParseScanPlanResponse(resp);
+	auto resp = MakeRequestResp(ctx, url, credentials.token, body);
+	int64_t retry_after_ms = ParseRetryAfterMs(*resp);
+	auto result = ParseScanPlanResponse(resp->body);
 	UC_LOG_DEBUG(ctx, "scan-plan.PlanTableScan %s.%s.%s -> status=%s plan_id=%s inline=%zu plan_tasks=%zu delete=%zu%s%s",
 	                 catalog_name, schema_name, table_name, UCScanPlanStatusToString(result.status),
 	                 result.plan_id.c_str(), result.file_scan_tasks.size(), result.plan_tasks.size(),
@@ -741,13 +793,42 @@ UCScanPlanResult UCAPI::PlanTableScan(ClientContext &ctx, const string &catalog_
 	                 result.status == UCScanPlanStatus::FAILED ? " error=" : "",
 	                 result.status == UCScanPlanStatus::FAILED ? result.error_message.c_str() : "");
 
-	constexpr int POLL_COUNT_MAX = 20;
-	constexpr int POLL_SLEEP_MS = 500;
-	for (int i = 0; i < POLL_COUNT_MAX && result.status == UCScanPlanStatus::SUBMITTED; i++) {
-		ctx.InterruptCheck(); // honor query cancel / timeout instead of blocking through the poll
-		std::this_thread::sleep_for(std::chrono::milliseconds(POLL_SLEEP_MS));
-		result = FetchPlanningResult(ctx, catalog_name, schema_name, table_name, result.plan_id, credentials,
-		                             scan_plan_endpoint);
+	// Poll fetchPlanningResult until a terminal status (completed/failed/cancelled). No fixed
+	// iteration cap — a legitimately slow server-side plan must not be cut off (the old
+	// 20x500ms=10s cap spuriously failed large tables); a total wall-clock budget is only a
+	// backstop against a wedged server. Each sleep honors the server's Retry-After when present,
+	// else backs off 100ms->1s, and is chunked so a query cancel lands within ~100ms. On abort
+	// (cancel / budget exhaustion / mid-poll error) the plan is best-effort DELETEd.
+	constexpr int64_t POLL_BUDGET_MS = 5 * 60 * 1000;
+	constexpr int64_t POLL_MIN_SLEEP_MS = 100;
+	constexpr int64_t POLL_MAX_SLEEP_MS = 1000;
+	constexpr int64_t POLL_MAX_RETRY_AFTER_MS = 60 * 1000; // clamp a hostile Retry-After
+	int64_t backoff_ms = POLL_MIN_SLEEP_MS;
+	int64_t elapsed_ms = 0;
+	try {
+		while (result.status == UCScanPlanStatus::SUBMITTED) {
+			if (elapsed_ms >= POLL_BUDGET_MS) {
+				throw IOException("scan-plan: planning for '%s.%s.%s' (plan_id=%s) did not reach a terminal "
+				                  "status within %lld s",
+				                  catalog_name, schema_name, table_name, result.plan_id,
+				                  (long long)(POLL_BUDGET_MS / 1000));
+			}
+			int64_t sleep_ms = retry_after_ms >= 0 ? retry_after_ms : backoff_ms;
+			sleep_ms = MinValue<int64_t>(MaxValue<int64_t>(sleep_ms, POLL_MIN_SLEEP_MS), POLL_MAX_RETRY_AFTER_MS);
+			for (int64_t slept = 0; slept < sleep_ms; slept += POLL_MIN_SLEEP_MS) {
+				ctx.InterruptCheck(); // land a cancel within ~100ms rather than blocking the whole sleep
+				std::this_thread::sleep_for(
+				    std::chrono::milliseconds(MinValue<int64_t>(POLL_MIN_SLEEP_MS, sleep_ms - slept)));
+			}
+			elapsed_ms += sleep_ms;
+			retry_after_ms = -1;
+			result = FetchPlanningResult(ctx, catalog_name, schema_name, table_name, result.plan_id, credentials,
+			                             scan_plan_endpoint, &retry_after_ms);
+			backoff_ms = MinValue<int64_t>(backoff_ms * 2, POLL_MAX_SLEEP_MS);
+		}
+	} catch (...) {
+		CancelPlan(ctx, scan_plan_endpoint, catalog_name, schema_name, table_name, result.plan_id, credentials.token);
+		throw;
 	}
 
 	return result;
