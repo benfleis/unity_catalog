@@ -1,93 +1,121 @@
 """Regression: a UC /tables ColumnInfo with null type_precision must parse (coerce to 0), not throw.
 
-Delta-Spark-created tables report type_precision/type_scale as JSON null in the UC 0.5 /tables
-response; ParseColumnDefinition (src/uc_api.cpp) parsed them with fail_on_missing=true and threw
+Delta-Spark-created tables report type_precision/type_scale as JSON null in the UC /tables response;
+`ParseColumnDefinition` (src/uc_api.cpp) once parsed them with fail_on_missing=true and threw
 `IO Error: Invalid field found while parsing field: type_precision` on ANY listing/read -- before
-touching Delta data. `uctl`/`bin/uc` always write 0, so they can't reproduce; we register a
-metadata-only table with a null-precision column directly via the UC REST API (the Spark shape),
-then the body attaches + lists it. Pre-fix: SHOW ALL TABLES raises. Post-fix: lists it.
+touching Delta data. `uctl`/`bin/uc` always write 0, so a live OSS server can't reproduce the shape.
 
-DRAFT -- verify against a live UC 0.5 server before relying on it:
-  (1) the POST /tables body / required fields (UC 0.5 may want more than the below),
-  (2) that OMITTING type_precision stores NULL (as Spark does) rather than the server defaulting 0.
-If the server coerces null->0, this won't reproduce and we fall back to a mock /tables response
-(a small http.server returning canned JSON) or a Spark-written table.
+This drives the extension's read path (CREATE SECRET -> ATTACH -> SHOW ALL TABLES) against a small
+in-process **mock** Unity Catalog server whose /tables response carries the exact null-precision
+ColumnInfo. That makes it a deterministic test of the *parser* -- no live UC container, no
+registration, no read-your-writes/cold-start timing (an earlier live version was flaky on CI for
+exactly those reasons; see git history and scripts/uc_read_after_write_repro.py).
 """
 
+import http.server
 import json
-import urllib.error
-import urllib.request
+import os
+import subprocess
+import threading
+from pathlib import Path
 
-try:
-    from driver import run_paired
-except ImportError:
-    import pytest
+import pytest
 
-    # Parked: this test rode onto main/v1.5 ahead of the duckdb-pytest-driver. While the driver
-    # is absent there's nothing to run, so skip quietly -- `make test` (the bare unittest binary)
-    # ignores .py files anyway, and an unrelated `pytest` run shouldn't explode just because the
-    # driver hasn't landed yet.
-    pytest.skip(
-        "duckdb-pytest-driver not present yet; type_precision regression parked until it lands.",
-        allow_module_level=True,
-    )
-else:
-    # POISON PILL -- deliberately loud, do NOT soften. Fires the moment the driver DOES land,
-    # which is the signal to come back and finish this off: confirm the oss_local uc_server
-    # fixture boots, then delete this whole try/except and keep just the bare import above.
-    # A hard fail at exactly that moment forces the fix-up instead of letting the test rot
-    # silently skipped once its one dependency is finally available.
-    raise RuntimeError(
-        "POISON PILL: duckdb-pytest-driver is present -- finish wiring type_precision.py "
-        "(confirm the oss_local uc_server fixture runs, drop this guard down to the bare "
-        "`from driver import run_paired`), then delete this pill. "
-        "See the fix-type-precision-null landing."
-    )
+_REPO = Path(__file__).resolve().parents[2]
+_CATALOG = "duck"
+_SCHEMAS = ("cmt", "plain")
 
-
-def _register_null_precision_table(endpoint, *, catalog="duck", schema="cmt", name="spark_like"):
-    def _col(pos, col_name, type_name, type_text, spark_type):
-        # UC 0.5 validates type_json -- it must be the full Spark field descriptor, not "{}".
-        # type_precision/type_scale OMITTED -> stored null (the Spark shape that triggers the bug).
-        return {
-            "name": col_name,
-            "type_name": type_name,
-            "type_text": type_text,
-            "type_json": json.dumps({"name": col_name, "type": spark_type, "nullable": True, "metadata": {}}),
-            "position": pos,
+# The Delta-Spark shape `uctl` never produces: columns whose type_precision/type_scale are JSON null.
+# This is the exact ColumnInfo pre-fix ParseColumnDefinition threw on.
+_SPARK_LIKE_TABLE = {
+    "name": "spark_like",
+    "catalog_name": _CATALOG,
+    "schema_name": "cmt",
+    "table_type": "EXTERNAL",
+    "data_source_format": "DELTA",
+    "storage_location": "file:///tmp/uc-type-precision-repro",
+    "table_id": "00000000-0000-0000-0000-000000000001",
+    "columns": [
+        {
+            "name": "id",
+            "type_text": "bigint",
+            "type_name": "LONG",
+            "type_precision": None,
+            "type_scale": None,
+            "position": 0,
             "nullable": True,
-        }
-
-    body = {
-        "name": name,
-        "catalog_name": catalog,
-        "schema_name": schema,
-        "table_type": "EXTERNAL",
-        "data_source_format": "DELTA",
-        # Listing (SHOW ALL TABLES) parses ColumnInfo but does NOT read Delta files, so a dummy
-        # location suffices to hit the parse bug.
-        "storage_location": "file:///tmp/uc-type-precision-repro",
-        "columns": [
-            _col(0, "id", "LONG", "bigint", "long"),
-            _col(1, "name", "STRING", "string", "string"),
-        ],
-    }
-    req = urllib.request.Request(
-        f"{endpoint.rstrip('/')}/api/2.1/unity-catalog/tables",
-        data=json.dumps(body).encode(),
-        method="POST",
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=5) as r:
-            return json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        # Surface UC's validation detail (urllib buries it in the response body) so a 400 names
-        # the offending field instead of a bare "Bad Request".
-        raise AssertionError(f"POST /tables -> {e.code} {e.reason}: {e.read().decode()}") from e
+        },
+        {"name": "name", "type_text": "string", "type_name": "STRING", "position": 1, "nullable": True},
+    ],
+}
 
 
-def test_type_precision_null(request, uc_server):
-    """Register the null-precision table, then run the paired .test (attach + list)."""
-    _register_null_precision_table(uc_server.endpoint)
-    run_paired(request)
+class _MockUnityCatalog:
+    """Serves the /catalogs + /schemas + /tables the ATTACH + SHOW ALL TABLES read path needs.
+
+    Records every request path so a missing/unexpected endpoint is visible on failure.
+    """
+
+    def __init__(self):
+        self.requests = []
+        outer = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                outer.requests.append(self.path)
+                p = self.path
+                if "/catalogs" in p:
+                    body = {"catalogs": [{"name": _CATALOG}]}
+                elif "/schemas" in p:
+                    body = {"schemas": [{"name": s, "catalog_name": _CATALOG} for s in _SCHEMAS]}
+                elif "/tables" in p:
+                    body = {"tables": [_SPARK_LIKE_TABLE] if "schema_name=cmt" in p else []}
+                else:
+                    body = {}
+                payload = json.dumps(body).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(payload)
+
+        self._httpd = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+
+    def __enter__(self):
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._httpd.shutdown()
+
+    @property
+    def endpoint(self):
+        host, port = self._httpd.server_address
+        return f"http://{host}:{port}"
+
+
+def _duckdb_bin():
+    binary = _REPO / os.environ.get("DUCKDB_BUILD_DIR", "build/debug") / "duckdb"
+    if not binary.exists():
+        pytest.skip(f"duckdb CLI not built at {binary} (set DUCKDB_BUILD_DIR)")
+    return str(binary)
+
+
+def test_type_precision_null():
+    """SHOW ALL TABLES over a null-type_precision ColumnInfo must succeed (not throw) and list the table."""
+    with _MockUnityCatalog() as mock:
+        sql = (
+            f"CREATE SECRET (TYPE UNITY_CATALOG, TOKEN 'x', ENDPOINT '{mock.endpoint}', AWS_REGION 'us-east-2');"
+            f"ATTACH '{_CATALOG}' AS unity (TYPE unity_catalog, DEFAULT_SCHEMA 'cmt');"
+            "SELECT 'spark_like_count=' || count(*) FROM (SHOW ALL TABLES) t WHERE t.name = 'spark_like';"
+        )
+        result = subprocess.run([_duckdb_bin(), "-unsigned", "-c", sql], capture_output=True, text=True, timeout=60)
+
+    detail = f"\n--- stderr ---\n{result.stderr}\n--- mock requests ---\n" + "\n".join(mock.requests)
+    # Core regression: the null type_precision must not raise while listing.
+    assert result.returncode == 0, "SHOW ALL TABLES errored on a null-type_precision ColumnInfo" + detail
+    # And the table must actually list -- proving the value was coerced (null -> 0), not dropped.
+    assert "spark_like_count=1" in result.stdout, "spark_like was not listed" + detail
