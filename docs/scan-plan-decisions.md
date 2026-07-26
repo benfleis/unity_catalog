@@ -276,3 +276,26 @@ same caveat as everything else in this session.
    against a real server at all yet.
 3. The equality-delete scope decision (§5) — if equality deletes turn out to matter for a real
    near-term use case, the field-id-schema gap is the thing to design next, not a quick patch.
+
+## Subsequent work (later in the same session)
+
+The doc above records the original `scan-plan-api--v1-main` work. Since then:
+
+- **Rebased onto `upstream/main` and squashed** into a single clean feature commit on
+  `scan-plan-api--v2-main`. Upstream had independently landed its own ducktest test-suite port
+  (#101/#102), so the branch adopts upstream's test infra as SoT and carries only the scan-plan
+  deliverable (src + roaring dep + scan_plan tests + docs); `uc_api.cpp` was 3-way merged to keep
+  upstream's `type_precision` null-parse fix.
+- **Open question #2 resolved — live-verified.** `scan_plan_deletes.test` passed against a real
+  Databricks warehouse: a DV-enabled DELETE surfaces as a `deletion-vector-v1` puffin blob, and
+  the test now asserts the puffin/DV path specifically via a `scan-plan.DeletionVector` log line.
+- **Async polling hardened** (own commit): poll-until-terminal with `Retry-After` + exponential
+  backoff + a wall-clock budget, `InterruptCheck` for cancellation, and a best-effort plan
+  `DELETE` on abort — replacing the old fixed 10s cap (borrowed shape from duckdb-iceberg #1204).
+- **C3 fix** (own commit): the truncated-DV-blob over-read in `FromBlob` (min-size 12→20 + a
+  pre-`Load` bound).
+- **SQL tooling + offline test**: `uc_read_deletion_vector` (public) and
+  `__internal_uc_plan_table_scan` (internal) table functions, plus
+  `test/irc/test_irc_api_retry.py` — a Python mock-server test covering the poll/retry/cancel
+  path offline. The `uc_read_deletion_vector` whole-file path gave `UCPuffinReader` its first
+  caller (review-finding S1 resolved by use). See `scan-plan-design.md` §5–6.

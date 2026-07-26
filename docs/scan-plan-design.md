@@ -270,24 +270,46 @@ thread the schema), not a follow-up patch — see decisions log open-question #3
 
 ## 5. Known gaps, assumptions, and review notes
 
-The load-bearing **unverified** assumption (no live UC credentials in this environment):
+The formerly load-bearing assumption is now **live-verified**: a DV-enabled `DELETE` on a
+Databricks catalog-managed table *does* surface through the scan-plan endpoint as a
+`PositionDeleteFile` with `content-offset` pointing at a `deletion-vector-v1` puffin blob.
+`scan_plan_deletes.test` passed against a live warehouse, and it now asserts the puffin/DV path
+specifically (via the `scan-plan.DeletionVector` log line) — not just that rows were dropped.
 
-> A DV-enabled `DELETE` on a Databricks catalog-managed table surfaces through the scan-plan
-> endpoint as a `PositionDeleteFile` with `content-offset` pointing at a `deletion-vector-v1`
-> puffin blob. `scan_plan_deletes.test` is written to confirm this on a first live run; if
-> Databricks represents it some other way, that's where it shows up.
+Design points from the review pass — status updated:
 
-Design points a reviewer should weigh (carried into the review pass, § from the review summary
-in this session — a couple applied, the rest reserved as judgment calls):
-
-- **`UCPuffinReader` container path is currently dead code** — the scan-plan API always gives a
-  byte range (`content-offset`/`content-size`), so `FromBlob` is called directly and the
-  container/footer reader is never reached. Kept as defensive insurance; a reviewer may prefer
-  to drop it (YAGNI) or keep it (cheap, already ported, correct). Reserved.
-- **DV routing keys on `content-offset >= 0`**, not on `file-format == "puffin"`. Correct per
-  the API's intent, but a belt-and-suspenders `file-format` cross-check would catch a malformed
-  response earlier. Reserved.
+- **`UCPuffinReader` container path is no longer dead code.** The `uc_read_deletion_vector` table
+  function's whole-file form (`functions/uc_deletion_vector.cpp`) reads a puffin container via
+  `UCPuffinReader`; the scan-plan hot path still calls `FromBlob` directly on the byte range. So
+  the container reader now has a real caller (review-finding S1 resolved by use, not deletion).
+- **Truncated-blob over-read (C3) — fixed.** `FromBlob` guarded only `blob_length < 12`; the
+  smallest legal blob is 20 bytes, so a declared `content-size` of 12–19 could read past the
+  buffer before the bound check fired. Now guarded (min 20 + a pre-`Load` bound).
+- **Float filter serialization precision — fixed** (`%.17g` round-trip + non-finite guard; §2.3).
+- **DV routing keys on `content-offset >= 0`** rather than `file-format == "puffin"`. Correct per
+  the API's intent; a `file-format` cross-check would catch a malformed response earlier. Reserved.
 - **`CRC32`'s static lookup table initializes without a lock** — a benign-but-real data race if
   two DV blobs decode concurrently (inherited from the ducklake port). Reserved.
-- **Float filter serialization precision** — applied a fix (round-trip-safe formatting +
-  non-finite guard); see §2.3.
+
+## 6. Async planning, cancellation, and SQL tooling
+
+**Async poll (`UCAPI::PlanTableScan`, `uc_api.cpp`).** `planTableScan` may return `submitted`;
+the client then polls `fetchPlanningResult` until a terminal status (`completed`/`failed`/
+`cancelled`). The loop honors the response `Retry-After` header (clamped to 60s) when present,
+else backs off exponentially 100ms→1s; it has no fixed iteration cap (a slow server plan must
+not be cut off) but a 5-minute wall-clock budget as a backstop. Each sleep is chunked so a query
+cancel (`ctx.InterruptCheck()`) lands within ~100ms, and on abort (cancel / timeout / mid-poll
+error) the plan is best-effort `DELETE`d so the server can release it.
+
+**Inspection / test tooling (SQL table functions).**
+- `uc_read_deletion_vector(path [, content_offset =>, content_size =>])` — decodes a DV to its
+  deleted positions (byte-range → `FromBlob`, or whole file → `UCPuffinReader`). Public-utility
+  naming; a shared-lib candidate for a non-UC-specific reader.
+- `__internal_uc_plan_table_scan(endpoint, catalog, schema, table, token [, filter =>])` —
+  drives `PlanTableScan` directly (bypassing catalog attach). `__internal_` per convention
+  (core `__internal_*`, `__internal_delta_ccv2_commit_staged`) — it's test/inspection plumbing.
+
+**Offline test.** `test/irc/test_irc_api_retry.py` runs a Python mock HTTP server (3 scan-plan
+routes) against the built `duckdb` CLI + `__internal_uc_plan_table_scan`, asserting the poll
+behavior (submitted→completed, Retry-After pacing, failed status, cancel→`DELETE`, filter-in-body)
+with no creds — the surface a live test can't easily exercise.

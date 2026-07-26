@@ -1,5 +1,6 @@
 #include "uc_multi_file_list.hpp"
 #include "uc_puffin.hpp"
+#include "uc_logging.hpp"
 
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
@@ -199,6 +200,10 @@ static void ScanPositionalDeleteFile(ClientContext &context, const UCScanDeleteF
 			}
 		}
 	});
+	// Logged (with the DV counterpart below) so a test can assert WHICH delete sub-path a live
+	// scan-plan response actually took — classic parquet position-delete vs deletion-vector blob.
+	UC_LOG_DEBUG(context, "scan-plan.PositionalDelete file=%s data_file=%s", delete_file.file_path,
+	             data_file_path);
 }
 
 // Iceberg v3 deletion vector: a `deletion-vector-v1` puffin blob at [content_offset,
@@ -222,6 +227,12 @@ static void ScanDeletionVectorFile(ClientContext &context, const UCScanDeleteFil
 	auto blob = UCDeletionVectorData::FromBlob(buffer.get(), length, delete_file.file_path);
 	set<idx_t> positions;
 	blob->ToSet(positions);
+	// The load-bearing confirmation: this line is emitted ONLY when a delete resolves to a
+	// deletion-vector-v1 puffin blob (content-offset present), so a test asserting its presence
+	// proves the puffin/DV path — not just that some delete was applied. See scan_plan_deletes.test.
+	UC_LOG_DEBUG(context, "scan-plan.DeletionVector file=%s offset=%lld size=%lld positions=%zu",
+	             delete_file.file_path, (long long)delete_file.content_offset,
+	             (long long)delete_file.content_size_in_bytes, positions.size());
 	for (auto pos : positions) {
 		out.insert(NumericCast<int64_t>(pos));
 	}
