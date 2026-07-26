@@ -1,0 +1,78 @@
+# name: test/databricks/scan_plan_deletes.test
+# description: scan-plan delete-file resolution (BuildUCDeleteFilter) against a table with actual deletes.
+#
+# NOT YET LIVE-VERIFIED (see docs/scan-plan-decisions.md "Delete-files test coverage"). This
+# exercises the same shape as scan_plan.test against scan_plan_days_deletes: 5 files, one row
+# per file deleted after a deletion-vector-enabling DELETE. What this actually proves on a live
+# run depends on how Databricks represents the delete in its scan-plan response -- a
+# `deletion-vector-v1` puffin blob (BuildUCDeleteFilter applies it) is the expected/designed-for
+# shape; anything else surfaces as a clear NotImplementedException rather than silently wrong
+# counts, so a first run against this table is itself the open question this test resolves.
+
+require parquet
+
+require unity_catalog
+
+require delta
+
+require httpfs
+
+require-env DATABRICKS_TOKEN
+
+require-env DATABRICKS_ENDPOINT
+
+require-env DATABRICKS_REGION
+
+require-env DATABRICKS_SCAN_PLAN_ENDPOINT
+
+require-env CATALOG
+
+require-env SCHEMA
+
+statement ok
+CREATE SECRET (
+    TYPE unity_catalog,
+    TOKEN '{DATABRICKS_TOKEN}',
+    ENDPOINT '{DATABRICKS_ENDPOINT}',
+    AWS_REGION '{DATABRICKS_REGION}'
+);
+
+statement ok
+ATTACH '{CATALOG}' AS unity (TYPE unity_catalog, READ_ONLY, DEFAULT_SCHEMA '{SCHEMA}',
+    scan_plan_endpoint '{DATABRICKS_SCAN_PLAN_ENDPOINT}');
+
+statement ok
+USE unity;
+
+# -----------------------------------------------------------------------------
+# Full scan: 50 rows written, 5 deleted (one per weekday) -> 45 remain
+#
+
+query I
+SELECT count(*) FROM scan_plan_days_deletes;
+----
+45
+
+query I
+SELECT count(*) FROM scan_plan_days_deletes WHERE id IN (5, 15, 25, 35, 45);
+----
+0
+
+# -----------------------------------------------------------------------------
+# Filter pushdown + delete application together: day = 'Mon' still prunes to 1 file,
+# and the deleted id (5) must not reappear even though the file-level filter is unrelated
+# to the delete.
+#
+
+query I
+SELECT count(*) FROM scan_plan_days_deletes WHERE day = 'Mon';
+----
+9
+
+query II
+SELECT min(id), max(id) FROM scan_plan_days_deletes WHERE day = 'Mon';
+----
+1	10
+
+statement ok
+DETACH unity;

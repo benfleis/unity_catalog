@@ -20,9 +20,8 @@ class UCSchemaEntry;
 struct UCCredentials {
 	string endpoint;
 	string token;
-
-	// Not really part of the credentials, but required to query s3 tables
-	string aws_region;
+	string aws_region;         // not really credentials; required to query S3 tables
+	string scan_plan_endpoint; // explicitly set via attach option; empty = probe on first use
 };
 
 class UCClearCacheFunction : public TableFunction {
@@ -37,7 +36,7 @@ public:
 	explicit UnityCatalog(AttachedDatabase &db_p, const string &internal_name, AttachOptions &attach_options,
 	                      UCCredentials credentials, const string &default_schema,
 	                      string catalog_name = "unity_catalog");
-	~UnityCatalog();
+	~UnityCatalog() override;
 
 	string internal_name;
 	AccessMode access_mode;
@@ -89,6 +88,13 @@ public:
 	string GetDBPath() override;
 
 	void ClearCache();
+
+	// Returns the scan plan endpoint to use for this catalog, or "" if scan planning is not
+	// configured.  Scan planning is opt-in: only active when scan_plan_endpoint is explicitly
+	// set as an ATTACH option.
+	string GetScanPlanEndpoint() const {
+		return credentials.scan_plan_endpoint;
+	}
 
 private:
 	void DropSchema(ClientContext &context, DropInfo &info) override;
