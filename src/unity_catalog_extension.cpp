@@ -12,7 +12,10 @@
 #include "storage/unity_catalog.hpp"
 #include "storage/uc_transaction_manager.hpp"
 #include "functions/uc_checkpoint.hpp"
+#include "functions/uc_deletion_vector.hpp"
+#include "functions/uc_plan_table_scan.hpp"
 #include "uc_api.hpp"
+#include "uc_logging.hpp"
 #include "unity_catalog_extension.hpp"
 
 namespace duckdb {
@@ -89,6 +92,12 @@ static unique_ptr<Catalog> UnityCatalogAttach(optional_ptr<StorageExtensionInfo>
 			secret_name = entry.second.ToString();
 		} else if (lower_name == "default_schema") {
 			default_schema = entry.second.ToString();
+		} else if (lower_name == "use_irc_scan_plan") {
+			credentials.use_irc_scan_plan = entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
+		} else if (lower_name == "api_irc_endpoint_override") {
+			// Hidden test escape hatch; users opt in with use_irc_scan_plan and let the URL derive.
+			credentials.irc_endpoint_override = entry.second.ToString();
+			StringUtil::RTrim(credentials.irc_endpoint_override, "/");
 		} else {
 			throw BinderException("Unrecognized option for UC attach: %s", entry.first);
 		}
@@ -138,7 +147,7 @@ static unique_ptr<Catalog> UnityCatalogAttach(optional_ptr<StorageExtensionInfo>
 		try {
 			default_schema = UCAPI::GetDefaultSchema(context, credentials);
 		} catch (Exception &e) {
-			DUCKDB_LOG_ERROR(context, "Failed to fetch default schema: %s", e.what());
+			UC_LOG_ERROR(context, "api.GetDefaultSchema failed: %s", e.what());
 		}
 	}
 
@@ -197,6 +206,12 @@ static void LoadInternal(ExtensionLoader &loader) {
 	// Register table checkpoint functions
 	loader.RegisterFunction(UCCheckpointTableFunction());
 	loader.RegisterFunction(UCForceCheckpointTableFunction());
+
+	// Inspect/decode Iceberg deletion vectors from SQL (see functions/uc_deletion_vector.hpp)
+	loader.RegisterFunction(UCReadDeletionVectorFunction());
+
+	// Internal: drive the IRC scan-plan request/poll directly (see functions/uc_plan_table_scan.hpp)
+	loader.RegisterFunction(UCInternalPlanTableScanFunction());
 }
 
 void UnityCatalogExtension::Load(ExtensionLoader &loader) {
